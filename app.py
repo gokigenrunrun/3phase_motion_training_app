@@ -1,6 +1,13 @@
 import streamlit as st
 
+from database import init_db
 from logic.measurement import start_measurement, stop_measurement
+from ui.styles import (
+    get_common_css,
+    play_bgm,
+    render_settings_button,
+    render_settings_panel,
+)
 from state import (
     PHASE_CAMERA_CHECK,
     PHASE_COUNTDOWN,
@@ -26,6 +33,7 @@ from ui.countdown_view import render_countdown_view
 from ui.demo_view import render_demo_view
 from ui.finished_view import render_finished_view
 from ui.measure_view import render_measure_view
+from ui.progress_indicator import render_progress_indicator
 from ui.ready_view import render_ready_view
 from ui.transition_view import render_transition_view
 
@@ -107,13 +115,15 @@ def route_view() -> None:
     else:
         st.error(f"未対応の phase です: {phase}")
 
+    # 進行状況インジケーター（DEMO/COUNTDOWN/MEASURE/TRANSITION のみ内部で表示判定）
+    render_progress_indicator()
 
-@st.fragment(run_every=0.2)
+
 def phase_controller() -> None:
-    """フェーズ境界だけを監視します。
+    """フェーズ境界を検出して遷移を実行する（通常関数・fragment なし）。
 
-    常時の全体 rerun は行わず、遷移が必要な瞬間だけ session_state を更新して
-    1回だけ st.rerun() します。
+    各 view の st.rerun() ループの中で毎回呼ばれ、
+    遷移が必要なタイミングだけ session_state を更新して st.rerun() する。
     """
 
     if not should_advance_phase():
@@ -124,39 +134,31 @@ def phase_controller() -> None:
 
     if phase == PHASE_DEMO:
         transition_to_countdown()
-        rerun_app()
-        return
+        st.rerun()
 
-    if phase == PHASE_COUNTDOWN and exercise is not None:
+    elif phase == PHASE_COUNTDOWN and exercise is not None:
         begin_measurement_phase(exercise=exercise, start_measurement_fn=start_measurement)
-        rerun_app()
-        return
+        st.rerun()
 
-    if phase == PHASE_MEASURE and exercise is not None:
+    elif phase == PHASE_MEASURE and exercise is not None:
         complete_measurement_phase(
             exercise=exercise,
             stop_measurement_fn=stop_measurement,
         )
-        rerun_app()
-        return
+        st.rerun()
 
-    if phase == PHASE_TRANSITION:
+    elif phase == PHASE_TRANSITION:
         transition_to_demo()
-        rerun_app()
-        return
-
-
-def rerun_app() -> None:
-    """fragment 内からでも画面本体を更新するため app rerun を優先します。"""
-
-    try:
-        st.rerun(scope="app")
-    except TypeError:
         st.rerun()
 
 
 def main() -> None:
+    init_db()
     init_session_state()
+    st.markdown(get_common_css(), unsafe_allow_html=True)
+    play_bgm()
+    render_settings_button()
+    render_settings_panel()
     phase_controller()
     route_view()
 

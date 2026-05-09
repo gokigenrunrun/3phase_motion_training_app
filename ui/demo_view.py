@@ -1,5 +1,26 @@
+"""お手本動画とカメラを並べて表示する画面（DEMO フェーズ）。"""
+
+import streamlit as st
+
 from exercises import Exercise
-from ui.training_stage import render_training_stage
+from state import get_remaining_from_snapshot
+from ui.media_blocks import PANEL_MAX_WIDTH_PX, render_video_panel, render_webcam_panel
+from ui.styles import render_header
+
+
+@st.fragment(run_every=1.0)
+def _demo_phase_watcher(phase_started_at: float | None, phase_duration: float) -> None:
+    """フェーズ終了を1秒ごとに監視するfragment。
+
+    タイマー表示は不要だが、時間切れを検出して full rerun を起こす必要がある。
+    iframe を含むメディアパネルとは独立して動作するため removeChild エラーが起きない。
+    """
+    remaining = max(0.0, get_remaining_from_snapshot(
+        started_at=phase_started_at,
+        duration=phase_duration,
+    ))
+    if remaining <= 0:
+        st.rerun()  # full rerun で phase_controller が遷移を検出する
 
 
 def render_demo_view(
@@ -8,13 +29,37 @@ def render_demo_view(
     phase_started_at: float | None,
     phase_duration: float,
 ) -> None:
-    """お手本とカメラを同じ枠で表示します。"""
+    """お手本動画とカメラ映像を2カラムで表示する画面を描画する。
 
-    render_training_stage(
-        exercise=exercise,
-        phase_label="お手本",
-        description=exercise.description,
-        phase_started_at=phase_started_at,
-        phase_duration=phase_duration,
-        video_loop=False,
+    CSS は app.py の main() で注入済みのため、ここでは呼ばない。
+    進行状況は画面下部の progress_indicator.py で表示するため
+    画面中央のドット表示は持たない。
+
+    Args:
+        exercise:         現在の種目
+        phase_started_at: フェーズ開始時刻（インターフェース統一のため受け取る）
+        phase_duration:   フェーズ継続時間（同上）
+    """
+    st.markdown(
+        render_header(
+            "",
+            "<ruby>お手本<rt>おてほん</rt></ruby>を　みてみよう",
+        ),
+        unsafe_allow_html=True,
     )
+
+    left, right = st.columns(2, gap="large")
+    with left:
+        st.write("お手本どうが")
+        render_video_panel(
+            video_path=str(exercise.video_path),
+            autoplay=True,
+            loop=False,
+            max_width_px=PANEL_MAX_WIDTH_PX,
+        )
+    with right:
+        st.write("あなたのうごき")
+        render_webcam_panel(max_width_px=PANEL_MAX_WIDTH_PX)
+
+    # iframe とは独立した fragment でフェーズ終了を監視する
+    _demo_phase_watcher(phase_started_at=phase_started_at, phase_duration=phase_duration)
