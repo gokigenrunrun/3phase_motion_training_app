@@ -36,7 +36,7 @@ def render_finished_view(*, results: list[dict], on_restart: Callable[[], None])
 
     # 1. ヘッダー
     st.markdown(
-        render_header("", "<ruby>結果<rt>けっか</rt></ruby>　はっぴょう！"),
+        render_header("", "けっか　はっぴょう！"),
         unsafe_allow_html=True,
     )
 
@@ -122,7 +122,7 @@ def _render_grade_banner(*, grade: str, score: float) -> None:
             unsafe_allow_html=True,
         )
     with score_col:
-        st.metric(label="そうごう　てんすう", value=f"{score:.0f} てん")
+        st.metric(label="ごうけい　てんすう", value=f"{score:.0f} てん")
     with diff_col:
         diff_text, diff_color = _build_diff_text(current_score=score)
         st.markdown(
@@ -161,13 +161,22 @@ def _build_diff_text(*, current_score: float) -> tuple[str, str]:
 # 4: 種目別グレード
 # -------------------------------------------------------
 
+# 本人向け表示用の種目名（exercise.name の漢字を全部ひらがな・カタカナに）
+_DISPLAY_NAMES_BY_KEY: dict[str, str] = {
+    "banzai": "バンザイ",
+    "right_leg_raise": "みぎあし　あげ",
+    "left_leg_raise": "ひだりあし　あげ",
+}
+
+
 def _render_per_exercise_cards(*, results: list[dict]) -> None:
     """種目ごとのグレードと点数を3カラムで表示する。"""
     if not results:
         return
     cols = st.columns(len(results))
     for col, result in zip(cols, results):
-        name = result.get("exercise_name", "")
+        key = result.get("exercise_key", "")
+        name = _DISPLAY_NAMES_BY_KEY.get(key, result.get("exercise_name", ""))
         grade = result.get("overall", "C")
         metrics = result.get("metrics", {})
         score = sum(metrics.values()) / len(metrics) if metrics else 0.0

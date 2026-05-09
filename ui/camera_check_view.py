@@ -21,10 +21,7 @@ def render_camera_check_view(on_confirm: Callable[[], None]) -> None:
         st.session_state.last_spoken = "camera_check"
 
     st.markdown(
-        render_header(
-            "",
-            "カメラを　<ruby>確認<rt>かくにん</rt></ruby>　しよう",
-        ),
+        render_header("", "カメラを　かくにん　しよう"),
         unsafe_allow_html=True,
     )
 

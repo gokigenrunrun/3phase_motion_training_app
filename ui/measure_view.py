@@ -32,7 +32,7 @@ def _measure_header_fragment(phase_started_at: float | None, phase_duration: flo
     st.markdown(
         render_header_with_timer(
             icon="",
-            title_html="<ruby>測定中<rt>そくていちゅう</rt></ruby>！",
+            title_html="そくていちゅう！",
             remaining=remaining,
             duration=phase_duration,
         ),
@@ -75,7 +75,7 @@ def render_measure_view(
     # ヘッダー直下に動画とカメラを並べる
     left, right = st.columns(2, gap="large")
     with left:
-        st.write("お手本どうが")
+        st.write("おてほんどうが")
         render_video_panel(
             video_path=str(exercise.video_path),
             autoplay=True,

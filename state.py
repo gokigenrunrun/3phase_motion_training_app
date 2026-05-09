@@ -9,16 +9,23 @@ from exercises import EXERCISES, Exercise
 PHASE_READY = "ready"
 PHASE_CAMERA_CHECK = "camera_check"
 PHASE_DEMO = "demo"
-PHASE_COUNTDOWN = "countdown"
+PHASE_PRE_MEASURE = "pre_measure"
+PHASE_START_DISPLAY = "start_display"
 PHASE_MEASURE = "measure"
 PHASE_TRANSITION = "transition"
 PHASE_FINISHED = "finished"
 
-COUNTDOWN_SECONDS = 3
-TRANSITION_SECONDS = 5.0
+# 廃止された定数（旧コード互換のため残置・流れには登場しない）
+PHASE_PRE_DEMO = "pre_demo"
+PHASE_COUNTDOWN = "countdown"
+
+PRE_MEASURE_SECONDS = 3
+START_DISPLAY_SECONDS = 2
+TRANSITION_SECONDS = 6.0
 
 PHASE_DURATIONS = {
-    PHASE_COUNTDOWN: COUNTDOWN_SECONDS,
+    PHASE_PRE_MEASURE: PRE_MEASURE_SECONDS,
+    PHASE_START_DISPLAY: START_DISPLAY_SECONDS,
     PHASE_TRANSITION: TRANSITION_SECONDS,
 }
 
@@ -112,11 +119,30 @@ def get_phase_duration() -> float:
     )
 
 
-def get_duration_for_phase(phase: str, exercise: Exercise | None) -> float:
-    """指定された phase と exercise に対応する長さを返します。"""
+def _measure_seconds_for_js(exercise: Exercise | None) -> int:
+    """JS タイマーに渡す計測秒数（demo_duration × measure_loop_count を四捨五入）。"""
+    if exercise is None:
+        return 10
+    return max(1, int(round(exercise.demo_duration * exercise.measure_loop_count)))
 
-    if phase in {PHASE_DEMO, PHASE_MEASURE}:
-        return exercise.demo_duration if exercise else 0.0
+
+def get_duration_for_phase(phase: str, exercise: Exercise | None) -> float:
+    """指定された phase と exercise に対応する長さを返します。
+
+    DEMO         : demo_duration × loop_count
+    MEASURE      : demo_duration × measure_loop_count
+    PRE_MEASURE  : JS アニメ(4.5s) + JS タイマー秒 + バッファ(1.0s)
+                   バッファは JS が確実に 0 に到達してクリーンアップを
+                   完了する時間を確保するため。
+    """
+
+    if phase == PHASE_DEMO:
+        return (exercise.demo_duration * exercise.loop_count) if exercise else 0.0
+    if phase == PHASE_MEASURE:
+        return (exercise.demo_duration * exercise.measure_loop_count) if exercise else 0.0
+    if phase == PHASE_PRE_MEASURE:
+        # JS アニメーション(4.5s) + JS タイマー int 秒 + バッファ(1.0s)
+        return _measure_seconds_for_js(exercise) + 4.5 + 1.0
     return PHASE_DURATIONS.get(phase, 0.0)
 
 
@@ -147,11 +173,25 @@ def should_advance_phase() -> bool:
 
 
 def transition_to_demo() -> None:
-    """transition 終了後、現在の exercise_index の demo に入ります。"""
+    """TRANSITION 終了後、現在の exercise_index の demo に入ります。"""
 
     st.session_state.measurement_running = False
     st.session_state.transition_message = None
     set_phase(PHASE_DEMO)
+
+
+def transition_to_pre_measure() -> None:
+    """DEMO 終了後、計測前の 3 秒カウントダウン (PRE_MEASURE) に入ります。"""
+
+    st.session_state.measurement_running = False
+    set_phase(PHASE_PRE_MEASURE)
+
+
+def transition_to_start_display() -> None:
+    """PRE_MEASURE 終了後、Start!! 表示の 2 秒間 (START_DISPLAY) に入ります。"""
+
+    st.session_state.measurement_running = False
+    set_phase(PHASE_START_DISPLAY)
 
 
 def transition_to_countdown() -> None:

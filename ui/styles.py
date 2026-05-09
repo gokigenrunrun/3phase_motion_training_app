@@ -17,11 +17,11 @@ import streamlit.components.v1 as components
 # カラー定数
 # -------------------------------------------------------
 
-COLOR_BLUE_BASE = "#378ADD"     # ベース青（ヘッダー・ボーダー）
-COLOR_BLUE_LIGHT = "#FFFFFF"    # 背景色（白）
+COLOR_BLUE_BASE = "#378ADD"     # ベース青・完了（ヘッダー・ボーダー）
 COLOR_BLUE_DARK = "#0C447C"     # 濃い青（テキスト）
-COLOR_BLUE_MID = "#85B7EB"      # 中間青（サブボーダー）
-COLOR_ORANGE = "#FF8C00"        # オレンジ（ボタン・アクセント）
+COLOR_BLUE_LIGHT = "#E6F1FB"    # 薄い水色（カード背景）
+COLOR_BLUE_MID = "#B5D4F4"      # 未実施・非アクティブ
+COLOR_ORANGE = "#FF8C00"        # オレンジ・現在進行中・アクション
 COLOR_ORANGE_LIGHT = "#FFF3E0"  # 薄いオレンジ（フィードバック背景）
 COLOR_WHITE = "#FFFFFF"
 
@@ -76,12 +76,23 @@ rt {{
     color: {COLOR_BLUE_BASE};
 }}
 
-/* ボタン */
+/* ボタン全般（サイズ・形状） */
 div[data-testid="stButton"] button {{
     font-size: 22px !important;
     height: 64px !important;
     border-radius: 12px !important;
     width: 100% !important;
+}}
+
+/* primary ボタン（は じ め る・だいじょうぶ・もう いちど）はオレンジ */
+div[data-testid="stButton"] button[kind="primary"] {{
+    background-color: {COLOR_ORANGE} !important;
+    border: 2px solid {COLOR_ORANGE} !important;
+    color: {COLOR_WHITE} !important;
+}}
+div[data-testid="stButton"] button[kind="primary"]:hover {{
+    background-color: #E07A00 !important;
+    border-color: #E07A00 !important;
 }}
 
 /* 全体フォント・背景 */
@@ -113,12 +124,14 @@ def render_header(icon: str, title_html: str) -> str:
     # render_header_with_timer と同じ寸法（min-height:88px）に統一して
     # フェーズが切り替わっても動画・カメラの y 座標が変わらないようにする
     return (
-        f'<div style="background:{COLOR_BLUE_BASE};border-radius:0 0 12px 12px;'
+        f'<div data-app-header="1" '
+        f'style="background:{COLOR_BLUE_BASE};border-radius:0 0 12px 12px;'
         f'padding:12px 20px;display:flex;align-items:center;gap:12px;'
         f'min-height:88px;box-sizing:border-box;'
         f'margin-left:-1rem;margin-right:-1rem;margin-top:-1rem;margin-bottom:16px;">'
         f'{icon_block}'
-        f'<div style="color:{COLOR_WHITE};font-size:20px;font-weight:700;line-height:1.3;">'
+        f'<div data-app-header-title="1" '
+        f'style="color:{COLOR_WHITE};font-size:20px;font-weight:700;line-height:1.3;">'
         f'{title_html}</div>'
         f'</div>'
     )
@@ -130,52 +143,66 @@ def render_header_with_timer(
     remaining: int,
     duration: float,
 ) -> str:
-    """ヘッダー右端に円形タイマーを埋め込んだHTMLを返す（measure_view 専用）。
+    """ヘッダー右端の上端に 64×64 円形タイマーを埋め込んだHTMLを返す。
 
-    fragment 内で 0.8 秒ごとに再描画する想定。中身は静的HTMLのみで
-    iframe/script を含まないため、頻繁な再描画でも removeChild エラーが起きない。
+    レイアウト:
+    - ヘッダー全体は align-items: flex-start でタイマーを上端に寄せる
+    - 左側のアイコン+タイトルは内側の padding:12px 0 で上下中央配置を維持
+    - SVG は viewBox 0 0 56 56 で内側をヘッダー色に塗ってシームレスに統合
 
     Args:
-        icon:       絵文字アイコン（例: "🏃"）
+        icon:       絵文字アイコン（例: "⏱"）。空文字なら左の白丸自体を出さない
         title_html: タイトルのHTML文字列（ruby タグなど可）
         remaining:  残り秒数（整数）
         duration:   フェーズ全体の秒数
     """
-    percent = max(0.0, min(1.0, remaining / duration)) if duration > 0 else 0.0
-    deg = int(360 * percent)
+    r = 22
+    circumference = 2 * 3.14159 * r  # ≈ 138.23
+    progress = max(0.0, min(1.0, remaining / duration)) if duration > 0 else 0.0
+    offset = circumference * (1.0 - progress)
+
     icon_block = (
-        f'<div style="width:48px;height:48px;border-radius:50%;'
+        f'<div style="width:40px;height:40px;border-radius:50%;'
         f'background:{COLOR_WHITE};display:flex;align-items:center;'
-        f'justify-content:center;font-size:24px;flex-shrink:0;">{icon}</div>'
+        f'justify-content:center;font-size:20px;flex-shrink:0;">{icon}</div>'
         if icon else ""
     )
 
     return (
         # 行頭空白なしで連結（Markdown コードブロック化を回避）
-        f'<div style="background:{COLOR_BLUE_BASE};padding:12px 20px;'
-        f'display:flex;align-items:center;justify-content:space-between;'
+        # ヘッダー本体: vertical padding は 0 にして子要素側で個別に padding
+        f'<div style="background:{COLOR_BLUE_BASE};padding:0 20px;'
+        f'display:flex;align-items:flex-start;justify-content:space-between;'
         f'margin-left:-1rem;margin-right:-1rem;margin-top:-1rem;margin-bottom:16px;'
+        f'min-height:64px;box-sizing:border-box;'
         f'border-radius:0 0 12px 12px;">'
-        # 左: アイコン + タイトル
-        f'<div style="display:flex;align-items:center;gap:12px;">'
+        # 左: アイコン+タイトル（padding で上下中央配置）
+        f'<div style="display:flex;align-items:center;gap:12px;padding:12px 0;">'
         f'{icon_block}'
-        f'<div style="color:{COLOR_WHITE};font-size:20px;font-weight:700;'
+        f'<div style="color:{COLOR_WHITE};font-size:20px;font-weight:500;'
         f'line-height:1.3;">{title_html}</div>'
         f'</div>'
-        # 右: 円形タイマー（conic-gradient で残り割合をオレンジ円弧で表示）
-        f'<div style="width:64px;height:64px;border-radius:50%;flex-shrink:0;'
-        f'background:conic-gradient({COLOR_ORANGE} {deg}deg,'
-        f'rgba(255,255,255,0.3) {deg}deg);'
-        f'display:flex;align-items:center;justify-content:center;">'
-        f'<div style="width:52px;height:52px;border-radius:50%;'
-        f'background:{COLOR_BLUE_BASE};display:flex;flex-direction:column;'
-        f'align-items:center;justify-content:center;">'
-        f'<span style="color:{COLOR_WHITE};font-size:20px;font-weight:700;'
-        f'line-height:1;">{remaining}</span>'
-        f'<span style="color:rgba(255,255,255,0.85);font-size:10px;'
-        f'margin-top:2px;">びょう</span>'
-        f'</div>'
-        f'</div>'
+        # 右: 64×64 円形タイマー（上端に寄せる・SVG 内座標は 56）
+        f'<svg width="64" height="64" viewBox="0 0 56 56" '
+        f'xmlns="http://www.w3.org/2000/svg" '
+        f'style="flex-shrink:0;align-self:flex-start;">'
+        # 背景の薄い円
+        f'<circle cx="28" cy="28" r="{r}" fill="none" '
+        f'stroke="rgba(255,255,255,0.25)" stroke-width="4"/>'
+        # オレンジのゲージ
+        f'<circle cx="28" cy="28" r="{r}" fill="none" '
+        f'stroke="{COLOR_ORANGE}" stroke-width="4" '
+        f'stroke-dasharray="{circumference:.2f}" '
+        f'stroke-dashoffset="{offset:.2f}" '
+        f'stroke-linecap="round" '
+        f'transform="rotate(-90 28 28)"/>'
+        # 内側をヘッダーと同じ青で塗る（一体感）
+        f'<circle cx="28" cy="28" r="18" fill="{COLOR_BLUE_BASE}"/>'
+        # 白文字で残り秒数
+        f'<text x="28" y="33" text-anchor="middle" fill="white" '
+        f'font-size="16" font-weight="700" font-family="sans-serif">'
+        f'{remaining}</text>'
+        f'</svg>'
         f'</div>'
     )
 
@@ -203,6 +230,99 @@ def get_character_svg() -> str:
 # -------------------------------------------------------
 # プログレスサークル（st.image() で表示・unsafe_allow_html 不要）
 # -------------------------------------------------------
+
+def render_countdown_overlay(
+    remaining: int,
+    duration: float,
+    zero_text: str = "Start!",
+) -> str:
+    """半透明オーバーレイ + 200×200 円形カウントダウン SVG の HTML を返す。
+
+    position:fixed で全画面を覆い、background は rgba(0,0,0,0.35) の薄暗幕。
+    pointer-events:none なので背後の操作はブロックしない。
+    COUNTDOWN・PRE_DEMO どちらのフェーズからも利用する共有ヘルパー。
+    Markdown のコードブロック化を避けるため、行頭空白なしの 1 行 HTML として返す。
+
+    Args:
+        remaining:  残り秒数（整数）
+        duration:   フェーズ全体の秒数
+        zero_text:  remaining=0 のときに表示する文字列（デフォルト "Start!"）
+    """
+    r = 80
+    circumference = 2 * 3.14159 * r  # ≒ 502.65
+    progress = max(0.0, min(1.0, remaining / duration)) if duration > 0 else 0.0
+    offset = circumference * (1 - progress)
+    display_text = str(remaining) if remaining > 0 else zero_text
+    # 多文字（"Start!" 等）はフォントを少し小さくして円内に収める
+    font_size = 64 if remaining > 0 else 48
+
+    return (
+        f'<div style="position:fixed;top:0;left:0;right:0;bottom:0;'
+        f'background:rgba(0,0,0,0.35);display:flex;flex-direction:column;'
+        f'align-items:center;justify-content:center;z-index:1000;'
+        f'pointer-events:none;">'
+        f'<svg width="200" height="200" viewBox="0 0 200 200" '
+        f'xmlns="http://www.w3.org/2000/svg">'
+        # 背景の薄い円
+        f'<circle cx="100" cy="100" r="{r}" fill="none" '
+        f'stroke="rgba(255,255,255,0.2)" stroke-width="10"/>'
+        # 進捗を示す青い円弧（12時方向起点・時計回りに減る）
+        f'<circle cx="100" cy="100" r="{r}" fill="none" '
+        f'stroke="{COLOR_BLUE_BASE}" stroke-width="10" '
+        f'stroke-dasharray="{circumference:.2f}" '
+        f'stroke-dashoffset="{offset:.2f}" '
+        f'stroke-linecap="round" '
+        f'transform="rotate(-90 100 100)"/>'
+        # 内側の半透明黒円（数字の可読性向上）
+        f'<circle cx="100" cy="100" r="68" fill="rgba(0,0,0,0.4)"/>'
+        # 残り秒数 / zero_text
+        f'<text x="100" y="118" text-anchor="middle" fill="white" '
+        f'font-size="{font_size}" font-weight="700" '
+        f'font-family="sans-serif">'
+        f'{display_text}</text>'
+        f'</svg>'
+        f'</div>'
+    )
+
+
+def render_start_display_overlay() -> str:
+    """円形カウントダウンと同じデザインの中央に「Start!!」を表示するオーバーレイ。
+
+    PRE_MEASURE のカウントダウン終了直後 (START_DISPLAY フェーズ) に
+    2 秒間表示する。render_countdown_overlay と統一デザイン。
+    pointer-events:none なので背後の操作はブロックしない。
+    Markdown のコードブロック化を避けるため、行頭空白なしの 1 行 HTML として返す。
+    """
+    r = 80
+    circumference = 2 * 3.14159 * r  # ≒ 502.65
+
+    return (
+        f'<div style="position:fixed;top:0;left:0;right:0;bottom:0;'
+        f'background:rgba(0,0,0,0.35);display:flex;flex-direction:column;'
+        f'align-items:center;justify-content:center;z-index:1000;'
+        f'pointer-events:none;">'
+        f'<svg width="200" height="200" viewBox="0 0 200 200" '
+        f'xmlns="http://www.w3.org/2000/svg">'
+        # 背景の薄い円（カウントダウンと同じ）
+        f'<circle cx="100" cy="100" r="{r}" fill="none" '
+        f'stroke="rgba(255,255,255,0.2)" stroke-width="10"/>'
+        # 青い円（満タン状態 = 円弧 100%）
+        f'<circle cx="100" cy="100" r="{r}" fill="none" '
+        f'stroke="{COLOR_BLUE_BASE}" stroke-width="10" '
+        f'stroke-dasharray="{circumference:.2f}" '
+        f'stroke-dashoffset="0" '
+        f'stroke-linecap="round" '
+        f'transform="rotate(-90 100 100)"/>'
+        # 内側の半透明黒円（テキストの可読性向上）
+        f'<circle cx="100" cy="100" r="68" fill="rgba(0,0,0,0.4)"/>'
+        # Start!! テキスト
+        f'<text x="100" y="108" text-anchor="middle" fill="white" '
+        f'font-size="28" font-weight="700" font-family="sans-serif">'
+        f'Start!!</text>'
+        f'</svg>'
+        f'</div>'
+    )
+
 
 def render_progress_circle(remaining: float, total: float, size: int = 160) -> str:
     """残り時間を円形プログレスバーで表示するSVGの base64 データURIを返す。
@@ -362,6 +482,36 @@ def play_bgm() -> None:
 # 音声読み上げ（Web Speech API）
 # -------------------------------------------------------
 
+def cleanup_measure_dom() -> None:
+    """PRE_MEASURE で parent.body に追加された timer/overlay DOM を削除する。
+
+    PRE_MEASURE 以外のフェーズの view 冒頭で呼ぶことで、JS タイマーの
+    残骸が画面に残り続ける問題を防ぐ。`_preMeasureRunning` フラグも
+    リセットして、次回 PRE_MEASURE の JS が正しく起動できるようにする。
+    """
+    components.html(
+        """
+        <script>
+        (function() {
+            try {
+                var pdoc = window.parent.document;
+                ['_pmOverlay', '_pmTimer'].forEach(function(id) {
+                    var el = pdoc.getElementById(id);
+                    if (el && el.parentNode) {
+                        el.parentNode.removeChild(el);
+                    }
+                });
+                if (window.parent._preMeasureRunning !== undefined) {
+                    window.parent._preMeasureRunning = false;
+                }
+            } catch (e) { /* 黙って無視 */ }
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
 def speak(text: str, rate: float = 0.85, pitch: float = 1.1) -> None:
     """Web Speech API で日本語テキストを読み上げる。
 
@@ -426,11 +576,28 @@ def _init_settings_state() -> None:
 def render_settings_button() -> None:
     """画面右上に⚙️設定ボタンを固定表示する。
 
-    Streamlit 1.43+ で `key` 引数指定の widget には `.st-key-<key>` クラスが
-    自動付与されるため、このクラスにのみ position:fixed を適用することで
-    他のボタン（とじる等）に影響を与えない。
+    サイドパネル「とじる」が ?close_settings=1&bgm=N&speech=N で
+    親ページをリロードしてくるので、この関数の冒頭で受け取って
+    session_state に音量を反映してから show_settings を False に戻す。
     """
     _init_settings_state()
+
+    # サイドパネルから戻ってきた場合の処理（音量反映 + パネル閉じる）
+    qp = st.query_params
+    if qp.get("close_settings") == "1":
+        try:
+            bgm = int(qp.get("bgm", st.session_state.bgm_volume))
+        except (TypeError, ValueError):
+            bgm = st.session_state.bgm_volume
+        try:
+            speech = int(qp.get("speech", st.session_state.speech_volume))
+        except (TypeError, ValueError):
+            speech = st.session_state.speech_volume
+        st.session_state.bgm_volume = max(0, min(100, bgm))
+        st.session_state.speech_volume = max(0, min(100, speech))
+        st.session_state.show_settings = False
+        st.query_params.clear()
+        st.rerun()
 
     # 設定ボタン専用の固定配置 CSS（key="settings_toggle" にスコープ）
     st.markdown(
@@ -471,62 +638,76 @@ def render_settings_button() -> None:
 
 
 def render_settings_panel() -> None:
-    """設定パネルを表示する（show_settings=True のときだけ）。
+    """設定パネルを画面右側のサイドパネルとして表示する（position:fixed）。
 
-    BGM 音量と読み上げ音量のスライダーを表示し、変更を即座に
-    親ウィンドウの _bgmAudio.volume / _speechVolume に反映する。
+    show_settings=True のときだけ実体パネルを描画し、それ以外では何もしない。
+    既存のコンテンツの上に被せる形で表示するため Streamlit の通常レイアウトを
+    押し下げない。閉じる時は `?close_settings=1&bgm=N&speech=N` で親をリロードし、
+    render_settings_button 冒頭でその query_param を処理する。
     """
     _init_settings_state()
     if not st.session_state.show_settings:
         return
 
-    with st.container(border=True):
-        st.markdown(
-            "<p style='font-size:18px;color:#378ADD;font-weight:500;margin-bottom:12px;'>"
-            "⚙️ おとの　せってい</p>",
-            unsafe_allow_html=True,
-        )
+    bgm_vol = st.session_state.bgm_volume
+    speech_vol = st.session_state.speech_volume
 
-        st.caption("🎵 BGMの　おとの　おおきさ")
-        bgm_vol = st.slider(
-            label="BGM",
-            min_value=0,
-            max_value=100,
-            value=st.session_state.bgm_volume,
-            key="bgm_slider",
-            label_visibility="collapsed",
-        )
-        st.session_state.bgm_volume = bgm_vol
-
-        st.caption("🔊 よみあげの　おとの　おおきさ")
-        speech_vol = st.slider(
-            label="speech",
-            min_value=0,
-            max_value=100,
-            value=st.session_state.speech_volume,
-            key="speech_slider",
-            label_visibility="collapsed",
-        )
-        st.session_state.speech_volume = speech_vol
-
-        if st.button("とじる", key="close_settings", use_container_width=True):
-            st.session_state.show_settings = False
-            st.rerun()
-
-    # 音量変更を即時反映する JS（components.html で確実にスクリプト実行）
-    components.html(
-        f"""
-        <script>
-        (function() {{
-            try {{
-                var parent = window.parent;
-                if (parent._bgmAudio) {{
-                    parent._bgmAudio.volume = {bgm_vol / 100};
-                }}
-                parent._speechVolume = {speech_vol / 100};
-            }} catch (e) {{ console.error('settings apply error:', e); }}
-        }})();
-        </script>
-        """,
-        height=0,
+    # 行頭空白なしで連結（Markdown コードブロック化を回避）
+    panel_html = (
+        # ─── サイドパネル本体 ───
+        f'<div id="settingsPanel" style="position:fixed;top:0;right:0;'
+        f'width:320px;height:100vh;background:{COLOR_WHITE};'
+        f'border-left:1px solid #E0E0E0;'
+        f'box-shadow:-4px 0 16px rgba(0,0,0,0.08);z-index:9998;'
+        f'padding:24px 20px;overflow-y:auto;'
+        f'transition:right 0.3s cubic-bezier(0.4,0,0.2,1);">'
+        # タイトル
+        f'<div style="font-size:18px;font-weight:500;color:{COLOR_BLUE_BASE};'
+        f'margin-bottom:24px;">⚙️ おとの　せってい</div>'
+        # BGM 音量スライダー
+        f'<div style="margin-bottom:24px;">'
+        f'<div style="font-size:14px;color:{COLOR_BLUE_DARK};margin-bottom:8px;">'
+        f'🎵 BGMの　おおきさ</div>'
+        f'<div style="display:flex;align-items:center;gap:12px;">'
+        f'<span style="font-size:12px;color:{COLOR_BLUE_MID};">0</span>'
+        f'<input type="range" id="settingsBgmSlider" min="0" max="100" value="{bgm_vol}" '
+        f'oninput="document.getElementById(\'settingsBgmVal\').textContent=this.value;'
+        f'try{{if(window._bgmAudio)window._bgmAudio.volume=this.value/100;'
+        f'window._bgmVolume=this.value/100;}}catch(e){{}}" '
+        f'style="flex:1;accent-color:{COLOR_ORANGE};height:4px;">'
+        f'<span style="font-size:12px;color:{COLOR_BLUE_MID};">100</span>'
+        f'<span id="settingsBgmVal" style="font-size:14px;color:{COLOR_BLUE_BASE};'
+        f'min-width:28px;text-align:right;">{bgm_vol}</span>'
+        f'</div></div>'
+        # 読み上げ音量スライダー
+        f'<div style="margin-bottom:32px;">'
+        f'<div style="font-size:14px;color:{COLOR_BLUE_DARK};margin-bottom:8px;">'
+        f'🔊 よみあげの　おおきさ</div>'
+        f'<div style="display:flex;align-items:center;gap:12px;">'
+        f'<span style="font-size:12px;color:{COLOR_BLUE_MID};">0</span>'
+        f'<input type="range" id="settingsSpeechSlider" min="0" max="100" value="{speech_vol}" '
+        f'oninput="document.getElementById(\'settingsSpeechVal\').textContent=this.value;'
+        f'try{{window._speechVolume=this.value/100;}}catch(e){{}}" '
+        f'style="flex:1;accent-color:{COLOR_ORANGE};height:4px;">'
+        f'<span style="font-size:12px;color:{COLOR_BLUE_MID};">100</span>'
+        f'<span id="settingsSpeechVal" style="font-size:14px;color:{COLOR_BLUE_BASE};'
+        f'min-width:28px;text-align:right;">{speech_vol}</span>'
+        f'</div></div>'
+        # とじるボタン（クリックで音量を query_param に乗せて親をリロード）
+        f'<button '
+        f'onclick="var b=document.getElementById(\'settingsBgmSlider\').value;'
+        f'var s=document.getElementById(\'settingsSpeechSlider\').value;'
+        f'location.href=\'?close_settings=1&bgm=\'+b+\'&speech=\'+s;" '
+        f'style="width:100%;height:48px;background:{COLOR_ORANGE};border:none;'
+        f'border-radius:10px;color:white;font-size:16px;font-weight:500;'
+        f'cursor:pointer;">とじる</button>'
+        f'</div>'
+        # ─── 背景オーバーレイ（クリックで閉じる）───
+        f'<div onclick="var b=document.getElementById(\'settingsBgmSlider\').value;'
+        f'var s=document.getElementById(\'settingsSpeechSlider\').value;'
+        f'location.href=\'?close_settings=1&bgm=\'+b+\'&speech=\'+s;" '
+        f'style="position:fixed;top:0;left:0;right:320px;bottom:0;'
+        f'background:rgba(0,0,0,0.2);z-index:9997;cursor:pointer;"></div>'
     )
+
+    st.markdown(panel_html, unsafe_allow_html=True)

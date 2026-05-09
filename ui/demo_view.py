@@ -41,20 +41,18 @@ def render_demo_view(
         phase_duration:   フェーズ継続時間（同上）
     """
     st.markdown(
-        render_header(
-            "",
-            "<ruby>お手本<rt>おてほん</rt></ruby>を　みてみよう",
-        ),
+        render_header("", "おてほんを　みてみよう"),
         unsafe_allow_html=True,
     )
 
     left, right = st.columns(2, gap="large")
     with left:
-        st.write("お手本どうが")
+        st.write("おてほんどうが")
         render_video_panel(
             video_path=str(exercise.video_path),
             autoplay=True,
             loop=False,
+            loop_count=exercise.loop_count,
             max_width_px=PANEL_MAX_WIDTH_PX,
         )
     with right:

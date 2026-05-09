@@ -21,11 +21,7 @@ def render_ready_view(on_start: Callable[[], None]) -> None:
         st.session_state.last_spoken = "ready"
 
     st.markdown(
-        render_header(
-            "",
-            "<ruby>運動<rt>うんどう</rt></ruby>　"
-            "<ruby>測定<rt>そくてい</rt></ruby>　アプリ",
-        ),
+        render_header("", "うんどう　そくてい　アプリ"),
         unsafe_allow_html=True,
     )
 
@@ -36,7 +32,7 @@ def render_ready_view(on_start: Callable[[], None]) -> None:
 
     st.info("いっしょに　うんどう　しよう！")
 
-    st.write("番号をいれてください")
+    st.write("ばんごうを　いれてください")
     subject_id: str = st.text_input(
         label="被験者番号",
         label_visibility="hidden",

@@ -38,24 +38,25 @@ SCORE_COLUMNS = [
 ]
 
 METRIC_LABELS = {
-    "head_movement": "頭部の安定性",
-    "shoulder_tilt": "肩の傾き",
-    "torso_tilt": "体幹の傾き",
+    "head_movement": "<ruby>頭部<rt>とうぶ</rt></ruby>の<ruby>安定<rt>あんてい</rt></ruby>性",
+    "shoulder_tilt": "<ruby>肩<rt>かた</rt></ruby>の傾き",
+    "torso_tilt": "<ruby>体幹<rt>たいかん</rt></ruby>の傾き",
     "leg_lift": "脚上げの高さ",
     "foot_sway": "軸足のブレ",
-    "arm_sag": "腕の保持",
+    "arm_sag": "<ruby>腕<rt>うで</rt></ruby>の保持",
     "banzai_score": "バンザイ姿勢",
     "average_score": "平均スコア",
 }
 
+# 配色は青・オレンジ系に統一（赤・ピンク・緑は使用禁止）
 SCORE_COLORS = {
-    "バンザイ姿勢": "#1E3A8A",
-    "頭部の安定性": "#EC4899",
-    "肩の傾き": "#3B82F6",
-    "体幹の傾き": "#0EA5E9",
-    "腕の保持": "#F59E0B",
-    "軸足のブレ": "#10B981",
-    "脚上げの高さ": "#8B5CF6",
+    "バンザイ姿勢": "#0C447C",   # 濃い青
+    "頭部の安定性": "#FF8C00",   # オレンジ（旧ピンク）
+    "肩の傾き": "#3B82F6",       # 中間青
+    "体幹の傾き": "#0EA5E9",     # 水色寄りの青
+    "腕の保持": "#F59E0B",       # 黄色寄りオレンジ
+    "軸足のブレ": "#378ADD",     # ベース青（旧グリーン）
+    "脚上げの高さ": "#B5D4F4",   # 薄い青（旧パープル）
 }
 
 NEUTRAL_COLOR = "#9CA3AF"
@@ -100,12 +101,12 @@ LEG_RADAR_TITLES = {
     "left_leg": "左脚上げ（1回目・2回目）",
 }
 SCORE_TIER_RULES = [
-    (85, "#2ECC71", "とても良い", "非常に安定した動きです。"),
-    (70, "#2979FF", "良い", "動作全体を通してバランスがとれています。"),
+    (85, "#378ADD", "とても良い", "非常に安定した動きです。"),
+    (70, "#0C447C", "良い", "動作全体を通してバランスがとれています。"),
     (55, "#FFB300", "まずまず", "全体の安定性をさらに磨きましょう。"),
-    (0, "#FF4081", "要改善", "フォーム改善の余地があります。"),
+    (0, "#FF8C00", "要改善", "フォーム改善の余地があります。"),
 ]
-DEFAULT_SCORE_COLOR = "#FF4081"
+DEFAULT_SCORE_COLOR = "#FF8C00"
 DEFAULT_SCORE_LABEL = "スコアなし"
 DEFAULT_SCORE_MESSAGE = "測定に必要なデータが不足しています。"
 
@@ -525,7 +526,12 @@ def compute_side_metric_series(
 
 
 def render_metric_feedback_cards(result_row: pd.Series, violin_data: Optional[Dict[str, Any]] = None) -> None:
-    st.markdown('<div class="section-title">🧩 詳細指標</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title">🧩 '
+        '<ruby>詳細<rt>しょうさい</rt></ruby>'
+        '<ruby>指標<rt>しひょう</rt></ruby></div>',
+        unsafe_allow_html=True,
+    )
     card_order = [
         ("banzai_score", "バンザイ姿勢"),
         ("head_movement", "頭部の安定性"),
@@ -734,7 +740,7 @@ def render_score_history_chart(history_df: Optional[pd.DataFrame]) -> None:
                 x=current_rows["session"],
                 y=current_rows["score"],
                 mode="markers+text",
-                marker=dict(size=15, color="#FF4081", line=dict(color="#FFFFFF", width=2)),
+                marker=dict(size=15, color="#FF8C00", line=dict(color="#FFFFFF", width=2)),
                 text=["今回"] * len(current_rows),
                 textposition="top center",
                 name="今回",
@@ -872,14 +878,14 @@ def render_legacy_result_view(*, results: Optional[list[dict]] = None, on_restar
     with col1:
         if payload.get("frame_scores_csv") is not None:
             st.download_button(
-                "💾 フレームスコアをCSVで保存",
+                "💾 フレームスコアをCSVで出力",
                 data=payload["frame_scores_csv"],
                 file_name="frame_scores.csv",
                 mime="text/csv",
             )
         if payload.get("pose_csv_bytes") is not None:
             st.download_button(
-                "💾 ポーズデータをCSVで保存",
+                "💾 ポーズデータをCSVで出力",
                 data=payload["pose_csv_bytes"],
                 file_name="pose_landmarks.csv",
                 mime="text/csv",

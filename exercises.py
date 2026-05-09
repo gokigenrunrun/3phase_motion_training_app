@@ -12,6 +12,8 @@ class Exercise:
     """各動作の定義です。
 
     evaluator_key は将来 MediaPipe の評価関数をつなぐために残しています。
+    loop_count: DEMO フェーズで何回ループ再生するか。
+    measure_loop_count: 計測（MEASURE/PRE_MEASURE）で動画を何回ループ再生するか。
     """
 
     key: str
@@ -20,6 +22,8 @@ class Exercise:
     video_path: Path
     demo_duration: float
     evaluator_key: str
+    loop_count: int = 1
+    measure_loop_count: int = 1
 
 
 def _probe_video_duration(video_path: Path) -> float:
@@ -58,6 +62,8 @@ def _build_exercise(
     description: str,
     filename: str,
     evaluator_key: str,
+    loop_count: int = 1,
+    measure_loop_count: int = 1,
 ) -> Exercise:
     video_path = ASSETS_DIR / filename
     return Exercise(
@@ -67,6 +73,8 @@ def _build_exercise(
         video_path=video_path,
         demo_duration=_probe_video_duration(video_path),
         evaluator_key=evaluator_key,
+        loop_count=loop_count,
+        measure_loop_count=measure_loop_count,
     )
 
 
@@ -77,6 +85,8 @@ EXERCISES = [
         description="まずはこの動きをやってみよう！\n膝を曲げて小さくなって、両手両足を伸ばしてバンザイを2回します。",
         filename="otehon_banzai.mp4",
         evaluator_key="evaluate_banzai",
+        loop_count=1,
+        measure_loop_count=2,
     ),
     _build_exercise(
         key="right_leg_raise",
@@ -84,6 +94,8 @@ EXERCISES = [
         description="次はこの動きをやってみよう！\n両手を横に広げ、右足を上げます。",
         filename="otehon_migi.mp4",
         evaluator_key="evaluate_right_leg_raise",
+        loop_count=2,
+        measure_loop_count=4,
     ),
     _build_exercise(
         key="left_leg_raise",
@@ -91,5 +103,7 @@ EXERCISES = [
         description="次はこの動きをやってみよう！\n両手を横に広げ、左足を上げます。",
         filename="otehon_hidari.mp4",
         evaluator_key="evaluate_left_leg_raise",
+        loop_count=2,
+        measure_loop_count=4,
     ),
 ]

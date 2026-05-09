@@ -21,6 +21,11 @@ env/
 # Streamlit local cache
 .streamlit/secrets.toml
 
+# 環境変数（API キー等の機密情報）
+.env
+.env.local
+.env.*.local
+
 # 被験者データ（個人情報を含む SQLite DB）
 data/
 
