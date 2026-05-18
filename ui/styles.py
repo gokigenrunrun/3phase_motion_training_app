@@ -749,30 +749,8 @@ def _init_settings_state() -> None:
 
 
 def render_settings_button() -> None:
-    """画面右上に⚙️設定ボタンを固定表示する。
-
-    サイドパネル「とじる」が ?close_settings=1&bgm=N&speech=N で
-    親ページをリロードしてくるので、この関数の冒頭で受け取って
-    session_state に音量を反映してから show_settings を False に戻す。
-    """
+    """画面右上に⚙️設定ボタンを固定表示する。"""
     _init_settings_state()
-
-    # サイドパネルから戻ってきた場合の処理（音量反映 + パネル閉じる）
-    qp = st.query_params
-    if qp.get("close_settings") == "1":
-        try:
-            bgm = int(qp.get("bgm", st.session_state.bgm_volume))
-        except (TypeError, ValueError):
-            bgm = st.session_state.bgm_volume
-        try:
-            speech = int(qp.get("speech", st.session_state.speech_volume))
-        except (TypeError, ValueError):
-            speech = st.session_state.speech_volume
-        st.session_state.bgm_volume = max(0, min(100, bgm))
-        st.session_state.speech_volume = max(0, min(100, speech))
-        st.session_state.show_settings = False
-        st.query_params.clear()
-        st.rerun()
 
     # 設定ボタン専用の固定配置 CSS（key="settings_toggle" にスコープ）
     st.markdown(
@@ -815,74 +793,115 @@ def render_settings_button() -> None:
 def render_settings_panel() -> None:
     """設定パネルを画面右側のサイドパネルとして表示する（position:fixed）。
 
-    show_settings=True のときだけ実体パネルを描画し、それ以外では何もしない。
-    既存のコンテンツの上に被せる形で表示するため Streamlit の通常レイアウトを
-    押し下げない。閉じる時は `?close_settings=1&bgm=N&speech=N` で親をリロードし、
-    render_settings_button 冒頭でその query_param を処理する。
+    st.slider と st.button を使うことで、スライダー操作とボタン押下が即座に
+    session_state に反映される。BGM 音量は再生中の <audio> へ components.html
+    経由で同時反映する（st.markdown 内の <script> は Streamlit が剥がすため
+    使用できない）。
     """
     _init_settings_state()
     if not st.session_state.show_settings:
         return
 
-    bgm_vol = st.session_state.bgm_volume
-    speech_vol = st.session_state.speech_volume
-
-    # 行頭空白なしで連結（Markdown コードブロック化を回避）
-    panel_html = (
-        # ─── サイドパネル本体 ───
-        f'<div id="settingsPanel" style="position:fixed;top:0;right:0;'
-        f'width:320px;height:100vh;background:{COLOR_WHITE};'
-        f'border-left:1px solid #E0E0E0;'
-        f'box-shadow:-4px 0 16px rgba(0,0,0,0.08);z-index:9998;'
-        f'padding:24px 20px;overflow-y:auto;'
-        f'transition:right 0.3s cubic-bezier(0.4,0,0.2,1);">'
-        # タイトル
-        f'<div style="font-size:18px;font-weight:500;color:{COLOR_BLUE_BASE};'
-        f'margin-bottom:24px;">⚙️ おとの　せってい</div>'
-        # BGM 音量スライダー
-        f'<div style="margin-bottom:24px;">'
-        f'<div style="font-size:14px;color:{COLOR_BLUE_DARK};margin-bottom:8px;">'
-        f'🎵 BGMの　おおきさ</div>'
-        f'<div style="display:flex;align-items:center;gap:12px;">'
-        f'<span style="font-size:12px;color:{COLOR_BLUE_MID};">0</span>'
-        f'<input type="range" id="settingsBgmSlider" min="0" max="100" value="{bgm_vol}" '
-        f'oninput="document.getElementById(\'settingsBgmVal\').textContent=this.value;'
-        f'try{{if(window._bgmAudio)window._bgmAudio.volume=this.value/100;'
-        f'window._bgmVolume=this.value/100;}}catch(e){{}}" '
-        f'style="flex:1;accent-color:{COLOR_ORANGE};height:4px;">'
-        f'<span style="font-size:12px;color:{COLOR_BLUE_MID};">100</span>'
-        f'<span id="settingsBgmVal" style="font-size:14px;color:{COLOR_BLUE_BASE};'
-        f'min-width:28px;text-align:right;">{bgm_vol}</span>'
-        f'</div></div>'
-        # 読み上げ音量スライダー
-        f'<div style="margin-bottom:32px;">'
-        f'<div style="font-size:14px;color:{COLOR_BLUE_DARK};margin-bottom:8px;">'
-        f'🔊 よみあげの　おおきさ</div>'
-        f'<div style="display:flex;align-items:center;gap:12px;">'
-        f'<span style="font-size:12px;color:{COLOR_BLUE_MID};">0</span>'
-        f'<input type="range" id="settingsSpeechSlider" min="0" max="100" value="{speech_vol}" '
-        f'oninput="document.getElementById(\'settingsSpeechVal\').textContent=this.value;'
-        f'try{{window._speechVolume=this.value/100;}}catch(e){{}}" '
-        f'style="flex:1;accent-color:{COLOR_ORANGE};height:4px;">'
-        f'<span style="font-size:12px;color:{COLOR_BLUE_MID};">100</span>'
-        f'<span id="settingsSpeechVal" style="font-size:14px;color:{COLOR_BLUE_BASE};'
-        f'min-width:28px;text-align:right;">{speech_vol}</span>'
-        f'</div></div>'
-        # とじるボタン（クリックで音量を query_param に乗せて親をリロード）
-        f'<button '
-        f'onclick="var b=document.getElementById(\'settingsBgmSlider\').value;'
-        f'var s=document.getElementById(\'settingsSpeechSlider\').value;'
-        f'location.href=\'?close_settings=1&bgm=\'+b+\'&speech=\'+s;" '
-        f'style="width:100%;height:48px;background:{COLOR_ORANGE};border:none;'
-        f'border-radius:10px;color:white;font-size:16px;font-weight:500;'
-        f'cursor:pointer;">とじる</button>'
-        f'</div>'
-        # ─── 背景オーバーレイ（クリックで閉じる）───
-        f'<div onclick="var b=document.getElementById(\'settingsBgmSlider\').value;'
-        f'var s=document.getElementById(\'settingsSpeechSlider\').value;'
-        f'location.href=\'?close_settings=1&bgm=\'+b+\'&speech=\'+s;" '
-        f'style="position:fixed;top:0;left:0;right:320px;bottom:0;'
-        f'background:rgba(0,0,0,0.2);z-index:9997;cursor:pointer;"></div>'
+    # 背景の薄暗幕（視覚的にのみ。クリック判定は不要）
+    st.markdown(
+        '<div style="position:fixed;top:0;left:0;right:320px;bottom:0;'
+        'background:rgba(0,0,0,0.2);z-index:9997;pointer-events:none;"></div>',
+        unsafe_allow_html=True,
     )
 
-    st.markdown(panel_html, unsafe_allow_html=True)
+    # コンテナ（key="settings_panel"）を position:fixed で右側サイドパネル化
+    st.markdown(
+        f"""<style>
+        .st-key-settings_panel {{
+            position: fixed !important;
+            top: 0 !important;
+            right: 0 !important;
+            width: 320px !important;
+            height: 100vh !important;
+            background: {COLOR_WHITE} !important;
+            border-left: 1px solid #E0E0E0 !important;
+            box-shadow: -4px 0 16px rgba(0,0,0,0.08) !important;
+            z-index: 9998 !important;
+            padding: 24px 20px !important;
+            overflow-y: auto !important;
+            box-sizing: border-box !important;
+        }}
+        .st-key-settings_panel [data-testid="stCaptionContainer"] {{
+            font-size: 14px !important;
+            color: {COLOR_BLUE_DARK} !important;
+            margin-bottom: 4px !important;
+        }}
+        </style>""",
+        unsafe_allow_html=True,
+    )
+
+    with st.container(key="settings_panel"):
+        st.markdown(
+            f'<div style="font-size:18px;font-weight:500;color:{COLOR_BLUE_BASE};'
+            f'margin-bottom:16px;">⚙️ おとの　せってい</div>',
+            unsafe_allow_html=True,
+        )
+
+        # BGM 音量
+        st.caption("🎵 BGMの　おおきさ")
+        bgm_vol = st.slider(
+            "BGM",
+            min_value=0,
+            max_value=100,
+            value=st.session_state.bgm_volume,
+            key="bgm_slider",
+            label_visibility="collapsed",
+        )
+        st.session_state.bgm_volume = bgm_vol
+
+        # 再生中の BGM <audio>（play_bgm が parent.window に張り付け）に
+        # 音量を即時反映する
+        components.html(
+            f"""
+            <script>
+            (function() {{
+                try {{
+                    var p = window.parent;
+                    if (p && p._bgmAudio) p._bgmAudio.volume = {bgm_vol / 100};
+                    if (p) p._bgmVolume = {bgm_vol / 100};
+                }} catch (e) {{}}
+            }})();
+            </script>
+            """,
+            height=0,
+        )
+
+        # 読み上げ音量
+        st.caption("🔊 よみあげの　おおきさ")
+        speech_vol = st.slider(
+            "よみあげ",
+            min_value=0,
+            max_value=100,
+            value=st.session_state.speech_volume,
+            key="speech_slider",
+            label_visibility="collapsed",
+        )
+        st.session_state.speech_volume = speech_vol
+
+        # 次回の読み上げで参照する parent._speechVolume を更新
+        components.html(
+            f"""
+            <script>
+            (function() {{
+                try {{ window.parent._speechVolume = {speech_vol / 100}; }} catch (e) {{}}
+            }})();
+            </script>
+            """,
+            height=0,
+        )
+
+        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
+
+        if st.button(
+            "とじる",
+            key="close_settings_btn",
+            use_container_width=True,
+            type="primary",
+        ):
+            st.session_state.show_settings = False
+            st.rerun()
