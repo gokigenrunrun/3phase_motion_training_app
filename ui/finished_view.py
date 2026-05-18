@@ -1,7 +1,11 @@
 """結果発表画面（FINISHED フェーズ）。"""
 
+import os
+import tempfile
 from typing import Callable
 
+import numpy as np
+import pandas as pd
 import streamlit as st
 
 import database
@@ -56,8 +60,10 @@ def render_finished_view(*, results: list[dict], on_restart: Callable[[], None])
     # 5. アンケート（Google フォーム埋め込み）
     _render_survey_form()
 
-    # 6. 研究者用折りたたみ（従来の詳細結果ビューをそのまま表示）
+    # 6. 研究者用折りたたみ（CSV採点 UI + 従来の詳細結果ビュー）
     with st.expander("くわしい　けっか（けんきゅうしゃ　よう）"):
+        _render_researcher_csv_scoring()
+        st.divider()
         render_legacy_result_view(results=results, on_restart=on_restart)
 
     # 7. 「もう　いちど！」ボタン（最下部）
@@ -278,3 +284,81 @@ def _score_to_speak_message(score: float) -> str:
     if score >= 55:
         return "がんばったね！えらい！つぎも やろう！"
     return "よく チャレンジしたね！えらい！"
+
+
+# -------------------------------------------------------
+# 研究者用：CSV をアップロードして採点する暫定 UI
+# -------------------------------------------------------
+
+def _render_researcher_csv_scoring() -> None:
+    """ランドマーク CSV をアップロード→旧アプリのロジックで採点する暫定 UI。"""
+    from logic.calculate_metrics import (
+        calculate_metrics_by_frame,
+        load_pose_dataframe,
+    )
+    from logic.scoring import (
+        calculate_overall_score,
+        get_grade,
+        score_from_frame_metrics,
+    )
+
+    st.markdown("#### CSVから採点（暫定）")
+
+    side = st.radio(
+        "CSVの種類",
+        ["みぎあし（right）", "ひだりあし（left）"],
+        horizontal=True,
+        key="csv_side",
+    )
+    action = "right_leg" if "right" in side else "left_leg"
+
+    uploaded_file = st.file_uploader(
+        "ランドマークCSVをアップロード",
+        type=["csv"],
+        key="landmark_csv",
+    )
+
+    if uploaded_file is None:
+        return
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+        tmp.write(uploaded_file.read())
+        tmp_path = tmp.name
+
+    try:
+        pose_df = load_pose_dataframe(tmp_path)
+        frame_df = calculate_metrics_by_frame(pose_df)
+        scores = score_from_frame_metrics(frame_df, action=action)
+        overall = calculate_overall_score(scores)
+        grade = get_grade(overall)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(
+                "そうごうスコア",
+                f"{overall:.1f} てん" if not np.isnan(overall) else "N/A",
+            )
+        with col2:
+            st.metric("グレード", grade)
+
+        st.dataframe(
+            pd.DataFrame(
+                {
+                    "指標": list(scores.keys()),
+                    "スコア": [
+                        f"{v:.1f}" if v is not None and not np.isnan(v) else "N/A"
+                        for v in scores.values()
+                    ],
+                }
+            ),
+            hide_index=True,
+        )
+
+    except Exception as e:  # noqa: BLE001
+        st.error(f"採点エラー：{e}")
+        st.exception(e)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
