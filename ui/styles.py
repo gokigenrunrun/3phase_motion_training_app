@@ -8,10 +8,18 @@ unsafe_allow_html=True を極力使わない。
 
 import base64
 import json
+import os
 from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
+
+# .env から GOOGLE_AI_API_KEY を読み込む（インポート時に1回だけ）
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # -------------------------------------------------------
 # カラー定数
@@ -513,22 +521,190 @@ def cleanup_measure_dom() -> None:
 
 
 def speak(text: str, rate: float = 0.85, pitch: float = 1.1) -> None:
-    """Web Speech API で日本語テキストを読み上げる。
+    """Google AI Studio (Gemini TTS) で日本語テキストを読み上げる。
 
-    音量は親ウィンドウの window._speechVolume（設定パネルが書き込み）から取得。
-    未設定の場合は 0.8 を使用する。
+    生成した音声を base64 にして components.html() の iframe で再生する。
+    GOOGLE_AI_API_KEY が無い・SDK 失敗時は Web Speech API にフォールバック。
+    同じテキストの連続読み上げは session_state で抑制する。
 
     Args:
         text:  読み上げるテキスト
-        rate:  読み上げ速度（1.0 が標準、0.85 でゆっくり）
-        pitch: 声の高さ（1.1 で少し高め・明るい印象）
+        rate:  Web Speech API フォールバック時のみ使用（速度）
+        pitch: Web Speech API フォールバック時のみ使用（声の高さ）
     """
+    # 同じテキストの重複再生を防止（フェーズ遷移時に session_state でリセット）
+    cache_key = f"spoken_{hash(text)}"
+    if st.session_state.get(cache_key):
+        return
+    st.session_state[cache_key] = True
+
+    api_key = os.getenv("GOOGLE_AI_API_KEY")
+    if not api_key or api_key.strip() in ("", "ここにAPIキーを貼り付ける"):
+        _speak_web_speech(text, rate, pitch)
+        return
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        # 音声バイト列を取得（API キー付きでキャッシュ）
+        audio_bytes, mime_type = _generate_gemini_tts(api_key, text, genai, types)
+
+        audio_b64 = base64.b64encode(audio_bytes).decode()
+        volume = st.session_state.get("speech_volume", 80) / 100
+
+        components.html(
+            f"""
+            <script>
+            (function() {{
+                try {{
+                    var audio = new Audio("data:{mime_type};base64,{audio_b64}");
+                    audio.volume = {volume};
+                    audio.play().catch(function(e) {{
+                        console.log('[TTS] audio play error:', e);
+                    }});
+                }} catch (e) {{ console.log('[TTS] inject error:', e); }}
+            }})();
+            </script>
+            """,
+            height=0,
+        )
+
+    except Exception as e:  # noqa: BLE001
+        print(f"[TTS] Google AI Studio error: {e}")
+        _speak_web_speech(text, rate, pitch)
+
+
+_TTS_CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "tts_cache"
+
+
+def _tts_cache_path(text: str) -> Path:
+    """テキスト文字列ごとの WAV キャッシュファイルパスを返す。"""
+    import hashlib
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+    return _TTS_CACHE_DIR / f"{digest}.wav"
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _generate_gemini_tts(api_key: str, text: str, _genai, _types) -> tuple[bytes, str]:
+    """Gemini TTS で音声を生成し (bytes, mime_type) を返す。
+
+    無料枠 (10 req/day) を節約するため、生成した WAV をディスクに永続キャッシュ。
+    同じテキストは 2 回目以降 API を叩かない。Gemini TTS は生 PCM を返すので
+    ブラウザ再生可能な WAV にラップして保存。
+    """
+    # ── ディスクキャッシュ ──
+    cache_file = _tts_cache_path(text)
+    if cache_file.exists():
+        return (cache_file.read_bytes(), "audio/wav")
+
+    # 短い文字列だと TTS モデルがテキスト生成と誤認することがあるため、
+    # プロンプトを段階的に強化しながら複数フォーマットでリトライする。
+    # ただし 429 (quota exhausted) はリトライしても無駄なので即座に raise。
+    prompts = [
+        f"Say in a friendly Japanese voice: 「{text}」",
+        f"次の日本語の文を、明るく自然な声で読み上げてください。文: 「{text}」",
+        f"以下のテキストを音声で出力してください。テキスト全体を必ず読み上げること。テキスト: 「{text}」",
+    ]
+
+    client = _genai.Client(api_key=api_key)
+    response = None
+    last_error: Exception | None = None
+    for prompt in prompts:
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash-preview-tts",
+                contents=prompt,
+                config=_types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                    speech_config=_types.SpeechConfig(
+                        voice_config=_types.VoiceConfig(
+                            prebuilt_voice_config=_types.PrebuiltVoiceConfig(
+                                voice_name="Kore",
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            # 空レスポンスチェック（parts が無いと別プロンプトで再試行）
+            if (response.candidates
+                    and response.candidates[0].content
+                    and getattr(response.candidates[0].content, "parts", None)
+                    and getattr(response.candidates[0].content.parts[0], "inline_data", None)):
+                break  # 成功
+            last_error = RuntimeError("Gemini TTS: parts が空")
+            response = None
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            response = None
+            # 429 (quota exhausted) はリトライしても枯渇のままなので即終了
+            if "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc):
+                break
+
+    if response is None:
+        raise last_error or RuntimeError("Gemini TTS: 全リトライ失敗")
+    part = response.candidates[0].content.parts[0]
+    pcm_data = part.inline_data.data
+    raw_mime = part.inline_data.mime_type or ""
+
+    # mime から sample rate を抽出（例: audio/L16;codec=pcm;rate=24000）
+    sample_rate = 24000
+    for token in raw_mime.split(";"):
+        token = token.strip()
+        if token.startswith("rate="):
+            try:
+                sample_rate = int(token.split("=", 1)[1])
+            except ValueError:
+                pass
+
+    wav_bytes = _pcm_to_wav(pcm_data, sample_rate=sample_rate, bits_per_sample=16, channels=1)
+
+    # ディスクキャッシュに保存（次回以降 API を叩かない）
+    try:
+        _TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_file.write_bytes(wav_bytes)
+    except OSError:
+        pass  # キャッシュ書き込み失敗は致命的でない
+
+    return (wav_bytes, "audio/wav")
+
+
+def _pcm_to_wav(pcm_data: bytes, *, sample_rate: int, bits_per_sample: int, channels: int) -> bytes:
+    """生 PCM (L16) バイト列に WAV ヘッダーを付けて返す。"""
+    import struct
+
+    byte_rate = sample_rate * channels * bits_per_sample // 8
+    block_align = channels * bits_per_sample // 8
+    data_size = len(pcm_data)
+    fmt_chunk_size = 16
+    riff_size = 4 + (8 + fmt_chunk_size) + (8 + data_size)
+
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        riff_size,
+        b"WAVE",
+        b"fmt ",
+        fmt_chunk_size,
+        1,  # PCM format
+        channels,
+        sample_rate,
+        byte_rate,
+        block_align,
+        bits_per_sample,
+        b"data",
+        data_size,
+    )
+    return header + pcm_data
+
+
+def _speak_web_speech(text: str, rate: float = 0.85, pitch: float = 1.1) -> None:
+    """フォールバック用 Web Speech API での読み上げ（API キー無し or 失敗時）。"""
     safe_text = json.dumps(text, ensure_ascii=False)
     components.html(
         f"""
         <script>
         (function() {{
-            // 親ウィンドウの speechSynthesis を優先（iframe 破棄に強い）
             var parent = null, synth = null, Utterance = null;
             try {{ parent = window.parent; }} catch (e) {{}}
             try {{
@@ -544,7 +720,6 @@ def speak(text: str, rate: float = 0.85, pitch: float = 1.1) -> None:
             u.lang = 'ja-JP';
             u.rate = {rate};
             u.pitch = {pitch};
-            // 設定パネルからの音量を反映（未設定時は 0.8）
             try {{
                 u.volume = (parent && parent._speechVolume !== undefined)
                     ? parent._speechVolume : 0.8;

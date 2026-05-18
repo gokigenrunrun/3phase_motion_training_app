@@ -86,10 +86,19 @@ def start_training_after_camera_check() -> None:
 
 
 def set_phase(phase: str) -> None:
-    """フェーズを更新し、その開始時刻を記録します。"""
+    """フェーズを更新し、その開始時刻を記録します。
+
+    フェーズ遷移時に音声読み上げの重複防止キャッシュをクリアして、
+    次フェーズで同じテキストでも改めて読み上げられるようにする。
+    """
 
     st.session_state.phase = phase
     st.session_state.phase_started_at = time.time()
+
+    # speak() の重複防止キャッシュ（spoken_<hash> キー）をクリア
+    spoken_keys = [k for k in st.session_state.keys() if str(k).startswith("spoken_")]
+    for k in spoken_keys:
+        del st.session_state[k]
 
 
 def get_current_exercise() -> Exercise | None:

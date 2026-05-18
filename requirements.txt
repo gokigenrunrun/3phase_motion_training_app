@@ -31,3 +31,8 @@ pyyaml>=6.0.0
 
 # --- テスト ---
 pytest>=7.4.0
+
+# --- TTS (Google AI Studio / Gemini) ---
+# `from google import genai` を使うため新 SDK の google-genai を使用
+google-genai>=1.0.0
+python-dotenv>=1.0.0
