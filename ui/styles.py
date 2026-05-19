@@ -520,6 +520,21 @@ def cleanup_measure_dom() -> None:
     )
 
 
+def _resolve_api_key() -> str | None:
+    """GOOGLE_AI_API_KEY を環境変数 → st.secrets の順に探して返す。
+
+    ローカルでは .env、Streamlit Cloud では Secrets（TOML）から読めるよう
+    両方の経路をサポートする。
+    """
+    key = os.getenv("GOOGLE_AI_API_KEY")
+    if key:
+        return key
+    try:
+        return st.secrets.get("GOOGLE_AI_API_KEY")
+    except Exception:
+        return None
+
+
 def speak(text: str, rate: float = 0.85, pitch: float = 1.1) -> None:
     """Google AI Studio (Gemini TTS) で日本語テキストを読み上げる。
 
@@ -538,7 +553,7 @@ def speak(text: str, rate: float = 0.85, pitch: float = 1.1) -> None:
         return
     st.session_state[cache_key] = True
 
-    api_key = os.getenv("GOOGLE_AI_API_KEY")
+    api_key = _resolve_api_key()
     if not api_key or api_key.strip() in ("", "ここにAPIキーを貼り付ける"):
         _speak_web_speech(text, rate, pitch)
         return
