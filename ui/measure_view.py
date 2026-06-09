@@ -76,12 +76,23 @@ def render_measure_view(
     left, right = st.columns(2, gap="large")
     with left:
         st.write("おてほんどうが")
-        render_video_panel(
-            video_path=str(exercise.video_path),
-            autoplay=True,
-            loop=True,
-            max_width_px=PANEL_MAX_WIDTH_PX,
-        )
+        if exercise.uses_segmented_video:
+            # 計測区間（0〜measure_video_end 秒）を 1 回再生して停止する
+            render_video_panel(
+                video_path=str(exercise.video_path),
+                autoplay=True,
+                seek_to=0.0,
+                stop_at=exercise.get_measure_video_end(),
+                play_from=0.0,
+                max_width_px=PANEL_MAX_WIDTH_PX,
+            )
+        else:
+            render_video_panel(
+                video_path=str(exercise.video_path),
+                autoplay=True,
+                loop=True,
+                max_width_px=PANEL_MAX_WIDTH_PX,
+            )
     with right:
         st.write("あなたのうごき")
         render_webcam_panel(max_width_px=PANEL_MAX_WIDTH_PX)

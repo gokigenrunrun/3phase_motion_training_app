@@ -48,13 +48,23 @@ def render_demo_view(
     left, right = st.columns(2, gap="large")
     with left:
         st.write("おてほんどうが")
-        render_video_panel(
-            video_path=str(exercise.video_path),
-            autoplay=True,
-            loop=False,
-            loop_count=exercise.loop_count,
-            max_width_px=PANEL_MAX_WIDTH_PX,
-        )
+        if exercise.uses_segmented_video:
+            # 単一動画の DEMO 区間（0〜demo_duration 秒）だけ再生して停止する
+            render_video_panel(
+                video_path=str(exercise.video_path),
+                autoplay=True,
+                seek_to=0.0,
+                stop_at=exercise.demo_duration,
+                max_width_px=PANEL_MAX_WIDTH_PX,
+            )
+        else:
+            render_video_panel(
+                video_path=str(exercise.video_path),
+                autoplay=True,
+                loop=False,
+                loop_count=exercise.loop_count,
+                max_width_px=PANEL_MAX_WIDTH_PX,
+            )
     with right:
         st.write("あなたのうごき")
         render_webcam_panel(max_width_px=PANEL_MAX_WIDTH_PX)

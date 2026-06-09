@@ -129,17 +129,17 @@ def get_phase_duration() -> float:
 
 
 def _measure_seconds_for_js(exercise: Exercise | None) -> int:
-    """JS タイマーに渡す計測秒数（demo_duration × measure_loop_count を四捨五入）。"""
+    """JS タイマーに渡す計測秒数（exercise.get_measure_duration() を四捨五入）。"""
     if exercise is None:
         return 10
-    return max(1, int(round(exercise.demo_duration * exercise.measure_loop_count)))
+    return max(1, int(round(exercise.get_measure_duration())))
 
 
 def get_duration_for_phase(phase: str, exercise: Exercise | None) -> float:
     """指定された phase と exercise に対応する長さを返します。
 
     DEMO         : demo_duration × loop_count
-    MEASURE      : demo_duration × measure_loop_count
+    MEASURE      : exercise.get_measure_duration()
     PRE_MEASURE  : JS アニメ(4.5s) + JS タイマー秒 + バッファ(1.0s)
                    バッファは JS が確実に 0 に到達してクリーンアップを
                    完了する時間を確保するため。
@@ -148,7 +148,7 @@ def get_duration_for_phase(phase: str, exercise: Exercise | None) -> float:
     if phase == PHASE_DEMO:
         return (exercise.demo_duration * exercise.loop_count) if exercise else 0.0
     if phase == PHASE_MEASURE:
-        return (exercise.demo_duration * exercise.measure_loop_count) if exercise else 0.0
+        return exercise.get_measure_duration() if exercise else 0.0
     if phase == PHASE_PRE_MEASURE:
         # JS アニメーション(4.5s) + JS タイマー int 秒 + バッファ(1.0s)
         return _measure_seconds_for_js(exercise) + 4.5 + 1.0

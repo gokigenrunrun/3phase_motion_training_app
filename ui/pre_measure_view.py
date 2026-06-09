@@ -21,6 +21,12 @@ from ui.media_blocks import PANEL_MAX_WIDTH_PX, render_video_panel, render_webca
 from ui.styles import render_header, speak
 
 
+# JS カウントダウンアニメーションの総尺（秒）。
+# カウントダウン 3s + Start!! 0.8s + ヘッダーへの移動 0.7s = 4.5s。
+# 区間再生の動画はこの時間だけ静止してから計測再生を開始する。
+PRE_MEASURE_ANIM_SECONDS = 4.5
+
+
 @st.fragment(run_every=1.0)
 def _pre_measure_watcher(
     phase_started_at: float | None,
@@ -70,21 +76,34 @@ def render_pre_measure_view(
     left, right = st.columns(2, gap="large")
     with left:
         st.write("おてほんどうが")
-        render_video_panel(
-            video_path=str(exercise.video_path),
-            autoplay=True,
-            loop=True,
-            max_width_px=PANEL_MAX_WIDTH_PX,
-        )
+        if exercise.uses_segmented_video:
+            # カウントダウン中は DEMO 終了位置（demo_duration 秒）で静止し、
+            # アニメーション終了後に 0 秒から計測区間（〜measure_video_end 秒）を再生する
+            render_video_panel(
+                video_path=str(exercise.video_path),
+                autoplay=False,
+                seek_to=exercise.demo_duration,
+                stop_at=exercise.get_measure_video_end(),
+                delay_before_play=PRE_MEASURE_ANIM_SECONDS,
+                play_from=0.0,
+                max_width_px=PANEL_MAX_WIDTH_PX,
+            )
+        else:
+            render_video_panel(
+                video_path=str(exercise.video_path),
+                autoplay=True,
+                loop=True,
+                max_width_px=PANEL_MAX_WIDTH_PX,
+            )
     with right:
         st.write("あなたのうごき")
         render_webcam_panel(max_width_px=PANEL_MAX_WIDTH_PX)
 
     # JS アニメーション注入（多重起動は JS 側のフラグで防止）
-    # 計測時間 = demo_duration × measure_loop_count（四捨五入）
+    # 計測時間 = exercise.get_measure_duration()（四捨五入）
     measure_duration = max(
         1,
-        int(round(exercise.demo_duration * exercise.measure_loop_count)),
+        int(round(exercise.get_measure_duration())),
     )
     components.html(
         _build_animation_html(measure_duration=measure_duration),

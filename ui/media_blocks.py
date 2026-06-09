@@ -26,6 +26,10 @@ def render_video_panel(
     loop: bool = False,
     loop_count: int = 1,
     max_width_px: int = PANEL_MAX_WIDTH_PX,
+    seek_to: float = 0.0,
+    stop_at: float | None = None,
+    delay_before_play: float = 0.0,
+    play_from: float | None = None,
 ) -> None:
     """お手本動画を components.html() の iframe 内で表示します。
 
@@ -33,20 +37,74 @@ def render_video_panel(
     - loop=True: HTML の loop 属性で**無限ループ**（PRE_MEASURE 等での背景再生用）
     - loop=False, loop_count=N: JS の 'ended' イベントで **N 回再生して停止**
 
+    区間再生モード（stop_at を指定した場合・loop/loop_count より優先）:
+    - 最初に seek_to の位置へシークする
+    - delay_before_play 秒だけ静止してから play_from（既定 seek_to）へ
+      シークして再生を開始する
+    - currentTime が stop_at に達したら一時停止する
+    （バンザイの「DEMO=0〜16 秒」「計測=16 秒で静止→0 秒から 34 秒まで」用）
+
     Chrome の自動再生ポリシーをかいくぐるために以下を全て満たす:
     - autoplay 属性 + muted 属性 + playsinline 属性
     - JS で .play() を強制 + ユーザー操作でアンロック
     """
     p = Path(video_path)
     video_b64 = _load_video_base64(str(p), p.stat().st_mtime_ns)
-    autoplay_attr = "autoplay" if autoplay else ""
 
-    if loop:
+    segmented = stop_at is not None
+
+    if segmented:
+        # 区間再生モード: HTML 属性では制御せず、すべて JS で行う
+        autoplay_attr = ""
+        loop_attr = ""
+        resolved_play_from = play_from if play_from is not None else seek_to
+        delay_ms = max(0, int(round(delay_before_play * 1000)))
+        loop_js = f"""
+                var SEEK_TO = {float(seek_to)};
+                var STOP_AT = {float(stop_at)};
+                var PLAY_FROM = {float(resolved_play_from)};
+                var DELAY_MS = {delay_ms};
+
+                function seekInit() {{
+                    try {{ v.currentTime = SEEK_TO; }} catch (e) {{}}
+                }}
+                // currentTime のセットにはメタデータ読み込みが必要
+                if (v.readyState >= 1) {{ seekInit(); }}
+                else {{ v.addEventListener('loadedmetadata', seekInit, {{ once: true }}); }}
+
+                // 停止位置の監視（stop_at に達したら一時停止）
+                v.addEventListener('timeupdate', function() {{
+                    if (v.currentTime >= STOP_AT) {{ v.pause(); }}
+                }});
+
+                function beginSegmentPlay() {{
+                    try {{ v.currentTime = PLAY_FROM; }} catch (e) {{}}
+                    var pr = v.play();
+                    if (pr && pr.catch) {{
+                        pr.catch(function(e) {{
+                            console.log('segment play blocked:', e);
+                        }});
+                    }}
+                }}
+
+                if (DELAY_MS > 0) {{
+                    // 遅延中は SEEK_TO の位置で静止（カウントダウン中の 16 秒静止）
+                    v.pause();
+                    setTimeout(beginSegmentPlay, DELAY_MS);
+                }} else {{
+                    beginSegmentPlay();
+                }}
+                // 自動再生がブロックされても、遅延後の再生はユーザー操作後なので
+                // 通常は play() が通る。muted のため大半の環境で即時再生可。
+        """
+    elif loop:
         # 無限ループモード: HTML loop 属性のみ
+        autoplay_attr = "autoplay" if autoplay else ""
         loop_attr = "loop"
         loop_js = ""
     else:
         # 回数指定モード: JS で正確に N 回再生
+        autoplay_attr = "autoplay" if autoplay else ""
         loop_attr = ""
         loop_js = f"""
                 var loopCount = {max(1, int(loop_count))};
@@ -58,6 +116,38 @@ def render_video_panel(
                         v.play();
                     }}
                 }});
+        """
+
+    # 区間再生モードでは再生タイミングを loop_js 側が完全に制御するため、
+    # 汎用の即時 .play() ブロックは挿入しない（カウントダウン中に
+    # 動画が再生開始してしまうのを防ぐ）。
+    if segmented:
+        autoplay_js = ""
+    else:
+        autoplay_js = """
+                function tryPlay() {
+                    var p = v.play();
+                    if (p && p.catch) {
+                        p.catch(function(e) {
+                            console.log('otehon video autoplay blocked:', e);
+                        });
+                    }
+                }
+
+                // 即時 + 500ms 後に再試行（DOM 確定待ち）
+                tryPlay();
+                setTimeout(tryPlay, 500);
+
+                // 自動再生がブロックされた場合は最初のユーザー操作で再生
+                var unlock = function() {
+                    if (v.paused) tryPlay();
+                };
+                try {
+                    window.parent.document.addEventListener('click', unlock, { once: true, capture: true });
+                    window.parent.document.addEventListener('keydown', unlock, { once: true, capture: true });
+                } catch (e) {
+                    document.addEventListener('click', unlock, { once: true, capture: true });
+                }
         """
 
     components.html(
@@ -106,30 +196,7 @@ def render_video_panel(
                 var v = document.getElementById('otehon-video');
                 if (!v) return;
                 v.muted = true;
-
-                function tryPlay() {{
-                    var p = v.play();
-                    if (p && p.catch) {{
-                        p.catch(function(e) {{
-                            console.log('otehon video autoplay blocked:', e);
-                        }});
-                    }}
-                }}
-
-                // 即時 + 500ms 後に再試行（DOM 確定待ち）
-                tryPlay();
-                setTimeout(tryPlay, 500);
-
-                // 自動再生がブロックされた場合は最初のユーザー操作で再生
-                var unlock = function() {{
-                    if (v.paused) tryPlay();
-                }};
-                try {{
-                    window.parent.document.addEventListener('click', unlock, {{ once: true, capture: true }});
-                    window.parent.document.addEventListener('keydown', unlock, {{ once: true, capture: true }});
-                }} catch (e) {{
-                    document.addEventListener('click', unlock, {{ once: true, capture: true }});
-                }}
+                {autoplay_js}
                 {loop_js}
             }})();
         </script>
