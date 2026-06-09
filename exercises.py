@@ -127,20 +127,26 @@ EXERCISES = [
     ),
     _build_exercise(
         key="right_leg_raise",
-        name="右足あげ",
+        name="みぎあし　あげ",
         description="次はこの動きをやってみよう！\n両手を横に広げ、右足を上げます。",
-        filename="otehon_migi.mp4",
+        filename="otehon_migi02.mp4",
         evaluator_key="evaluate_right_leg_raise",
-        loop_count=2,
-        measure_loop_count=4,
+        loop_count=1,
+        measure_loop_count=1,
+        demo_duration=16.0,        # DEMO は 0〜16 秒を再生
+        measure_duration=32.0,     # 計測は 32 秒
+        measure_video_end=34.0,    # 動画は 34 秒で終了
     ),
     _build_exercise(
         key="left_leg_raise",
-        name="左足あげ",
+        name="ひだりあし　あげ",
         description="次はこの動きをやってみよう！\n両手を横に広げ、左足を上げます。",
-        filename="otehon_hidari.mp4",
+        filename="otehon_hidari02.mp4",
         evaluator_key="evaluate_left_leg_raise",
-        loop_count=2,
-        measure_loop_count=4,
+        loop_count=1,
+        measure_loop_count=1,
+        demo_duration=16.0,        # DEMO は 0〜16 秒を再生
+        measure_duration=32.0,     # 計測は 32 秒
+        measure_video_end=34.0,    # 動画は 34 秒で終了
     ),
 ]
