@@ -185,7 +185,8 @@ def _render_per_exercise_cards(*, results: list[dict]) -> None:
         name = _DISPLAY_NAMES_BY_KEY.get(key, result.get("exercise_name", ""))
         grade = result.get("overall", "C")
         metrics = result.get("metrics", {})
-        score = sum(metrics.values()) / len(metrics) if metrics else 0.0
+        finite = _finite_values(metrics)
+        score = sum(finite) / len(finite) if finite else 0.0
         with col:
             st.markdown(
                 f'<div style="background:#E6F1FB;border-radius:12px;'
@@ -222,15 +223,25 @@ def _save_results_to_db_once(results: list[dict]) -> None:
         metrics = r.get("metrics", {})
         if not metrics:
             continue
-        overall_score = sum(metrics.values()) / len(metrics)
+        finite = _finite_values(metrics)
+        if not finite:
+            # 全指標が NaN（計測データなし等）の場合は DB に保存しない
+            continue
+        overall_score = sum(finite) / len(finite)
         grade = r.get("overall", _score_to_grade(overall_score))
+        # NaN/inf は REAL NOT NULL 制約に反するため有限値のみ保存する
+        finite_metric_scores = {
+            k: float(v)
+            for k, v in metrics.items()
+            if isinstance(v, (int, float)) and np.isfinite(v)
+        }
         try:
             database.save_result(
                 session_id=session_id,
                 exercise_key=r.get("exercise_key", ""),
                 overall_score=overall_score,
                 grade=grade,
-                metric_scores={k: float(v) for k, v in metrics.items()},
+                metric_scores=finite_metric_scores,
             )
         except Exception:
             # 既に保存済み等のエラーは無視する（rerun で再実行された場合の保険）
@@ -242,13 +253,25 @@ def _save_results_to_db_once(results: list[dict]) -> None:
 # スコア計算ヘルパー
 # -------------------------------------------------------
 
+def _finite_values(metrics: dict) -> list[float]:
+    """metrics の値のうち、数値かつ有限（NaN/inf でない）ものだけを返す。
+
+    実スコアでは適用外の指標（バンザイの leg_lift 等）が NaN になるため、
+    平均計算や DB 保存の前に除外する。
+    """
+    return [
+        float(v)
+        for v in metrics.values()
+        if isinstance(v, (int, float)) and np.isfinite(v)
+    ]
+
+
 def _compute_average_score(results: list[dict]) -> float:
-    """全種目の全指標スコアの平均を計算する。"""
+    """全種目の全指標スコアの平均を計算する（NaN は除外）。"""
     values = [
         v
         for result in results
-        for v in result.get("metrics", {}).values()
-        if isinstance(v, (int, float))
+        for v in _finite_values(result.get("metrics", {}))
     ]
     return sum(values) / len(values) if values else 0.0
 

@@ -4,6 +4,7 @@ from typing import Callable
 import streamlit as st
 
 from exercises import EXERCISES, Exercise
+from logic.measurement import build_real_result
 
 
 PHASE_READY = "ready"
@@ -193,6 +194,9 @@ def transition_to_pre_measure() -> None:
     """DEMO 終了後、計測前の 3 秒カウントダウン (PRE_MEASURE) に入ります。"""
 
     st.session_state.measurement_running = False
+    # 前の種目の計測データが残っていると、今回 webrtc 未接続時に誤って
+    # 前回データで採点してしまうため、ここでクリアしておく。
+    st.session_state._last_measurement_df = None
     set_phase(PHASE_PRE_MEASURE)
 
 
@@ -236,7 +240,8 @@ def complete_measurement_phase(
         stop_measurement_fn()
 
     st.session_state.measurement_running = False
-    st.session_state.results.append(build_dummy_result(exercise=exercise))
+    # 計測データから実スコアを生成（データが無ければ内部で N/A にフォールバック）
+    st.session_state.results.append(build_real_result(exercise=exercise))
     st.session_state.last_completed_exercise = exercise.name
 
     if st.session_state.exercise_index < len(EXERCISES) - 1:

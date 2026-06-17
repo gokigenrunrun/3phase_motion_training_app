@@ -183,11 +183,13 @@ def classify_action(frame_idx: int, fps: float = 30.0) -> str:
 
 
 def _is_left_leg_phase(action: Optional[str]) -> bool:
-    return action in LEFT_LEG_PHASES
+    # 参照動画のフェーズ名（left_leg_1/2）に加え、ライブ計測で種目から
+    # 直接指定する基底名 "left_leg" も左足フェーズとして扱う。
+    return action in LEFT_LEG_PHASES or action == "left_leg"
 
 
 def _is_right_leg_phase(action: Optional[str]) -> bool:
-    return action in RIGHT_LEG_PHASES
+    return action in RIGHT_LEG_PHASES or action == "right_leg"
 
 
 def _extract_frame_indices(series: pd.Series) -> pd.Series:
@@ -712,7 +714,16 @@ def calculate_metrics_from_df(dataframe: pd.DataFrame) -> Dict[str, float]:
     return _compute_metrics(processed, "dataframe")
 
 
-def calculate_metrics_by_frame(data: Union[str, Path, pd.DataFrame]) -> pd.DataFrame:
+def calculate_metrics_by_frame(
+    data: Union[str, Path, pd.DataFrame],
+    action_override: Optional[str] = None,
+) -> pd.DataFrame:
+    """フレームごとの指標 DataFrame を返す。
+
+    action_override が指定された場合、classify_action() のハードコード窓を
+    使わず、全フレームの action をその値に固定する。ライブ計測で種目が
+    自明な場合（例: 右足あげ → "right_leg"）に使用する。
+    """
     df = load_pose_dataframe(data)
 
     frames = sorted(df["frame"].unique())
@@ -770,7 +781,8 @@ def calculate_metrics_by_frame(data: Union[str, Path, pd.DataFrame]) -> pd.DataF
 
     records: List[Dict[str, float]] = []
     for frame in frames:
-        action = classify_action(frame)
+        # action_override があれば全フレーム同一 action に固定する
+        action = action_override if action_override else classify_action(frame)
         metrics: Dict[str, float] = {"frame": frame, "action": action}
 
         metrics["head_movement"] = float(head_movement_series.get(frame, np.nan))

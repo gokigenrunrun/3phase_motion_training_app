@@ -25,6 +25,12 @@ scipy>=1.10.0
 mediapipe>=0.10.14
 opencv-python>=4.8.0
 
+# --- リアルタイムカメラ取得（計測時のランドマーク取得用） ---
+# streamlit-webrtc でブラウザのカメラ映像を Python 側に取り込み、
+# av(PyAV) で各フレームを ndarray 化して MediaPipe に渡す。
+streamlit-webrtc>=0.47.0
+av>=12.0.0
+
 # --- 設定ファイル読み込み ---
 # metrics_config.yaml の読み込みに使用
 pyyaml>=6.0.0

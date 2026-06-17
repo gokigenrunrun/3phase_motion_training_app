@@ -169,8 +169,11 @@ def main() -> None:
     init_session_state()
     st.markdown(get_common_css(), unsafe_allow_html=True)
     play_bgm()
-    # カメラを一度だけ起動（rerun でも getUserMedia を再実行しない）
-    render_camera_once()
+    # カメラを一度だけ起動（rerun でも getUserMedia を再実行しない）。
+    # ただし PRE_MEASURE（計測フェーズ）では streamlit-webrtc が物理カメラを
+    # 掴むため、JS カメラの再取得をスキップして二重取得を避ける。
+    if st.session_state.get("phase") != PHASE_PRE_MEASURE:
+        render_camera_once()
     render_settings_button()
     render_settings_panel()
     # PRE_MEASURE 以外のフェーズでは JS タイマーの DOM 残骸をクリーンアップ

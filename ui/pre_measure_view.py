@@ -14,16 +14,25 @@ complete_measurement_phase を呼ぶ）。
 
 import streamlit as st
 import streamlit.components.v1 as components
+from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
 from exercises import Exercise
+from logic.measurement import start_measurement
+from logic.pose_capture import PoseCaptureProcessor
 from state import get_remaining_from_snapshot
 from ui.media_blocks import (
     PANEL_MAX_WIDTH_PX,
     render_demo_video_panel,
     render_video_panel,
-    render_webcam_panel,
 )
 from ui.styles import render_header, speak
+
+
+# WebRTC の NAT 越え用 STUN サーバ（ローカルでは無くても動くが、
+# Streamlit Cloud 等のデプロイ時に接続確立しやすくする）
+_RTC_CONFIGURATION = {
+    "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+}
 
 
 # JS カウントダウンアニメーションの総尺（秒）。
@@ -49,6 +58,83 @@ def _pre_measure_watcher(
     ))
     if remaining <= 0:
         st.rerun()
+
+
+def _stop_js_camera() -> None:
+    """JS カメラ（render_camera_once の永続 video）を停止・破棄する。
+
+    streamlit-webrtc が同じ物理カメラを掴むため、二重取得を避ける。
+    _cameraInitialized を false に戻すことで、計測フェーズを抜けた後の
+    フェーズで app.py の render_camera_once が JS カメラを再取得できる。
+    （計測中は app.py 側が render_camera_once をスキップする。）
+    """
+    components.html(
+        """
+        <script>
+        (function() {
+            var parent = window.parent;
+            try {
+                if (parent._cameraStream) {
+                    parent._cameraStream.getTracks().forEach(function(t) { t.stop(); });
+                    parent._cameraStream = null;
+                    console.log('[camera] JS camera stopped for webrtc takeover');
+                }
+            } catch (e) { console.log('[camera] stop error:', e); }
+            parent._cameraInitialized = false;
+            // 描画ループも停止
+            try {
+                if (parent._cameraDrawCancel) {
+                    parent.cancelAnimationFrame(parent._cameraDrawCancel);
+                    parent._cameraDrawCancel = null;
+                }
+            } catch (e) {}
+            // 永続 video 要素を削除
+            try {
+                var container = parent.document.getElementById('persistentCamera');
+                if (container) container.remove();
+            } catch (e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def _render_webrtc_camera(exercise: Exercise) -> None:
+    """streamlit-webrtc でカメラ映像を表示し、ランドマークを取得する。
+
+    - 先に JS カメラを停止して物理カメラを webrtc に明け渡す
+    - プロセッサが利用可能になったら、この PRE_MEASURE 突入につき 1 回だけ
+      計測（蓄積）を開始する
+    """
+    # JS カメラを停止（二重取得防止）
+    _stop_js_camera()
+
+    webrtc_ctx = webrtc_streamer(
+        key="pose_capture",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=_RTC_CONFIGURATION,
+        video_processor_factory=PoseCaptureProcessor,
+        media_stream_constraints={
+            "video": {"width": 720, "height": 960},
+            "audio": False,
+        },
+        async_processing=True,
+    )
+
+    # プロセッサ参照を session_state に保存（stop_measurement から参照する）
+    if webrtc_ctx.video_processor:
+        st.session_state._webrtc_ctx = webrtc_ctx
+
+        # この PRE_MEASURE 突入につき 1 回だけ計測を開始する。
+        # phase_started_at をキーにして二重開始を防ぐ。
+        started_key = st.session_state.get("phase_started_at")
+        if st.session_state.get("_capture_started_at") != started_key:
+            start_measurement(exercise)
+            st.session_state._capture_started_at = started_key
+            # complete_measurement_phase で stop_measurement が呼ばれるよう、
+            # 計測中フラグを立てる。
+            st.session_state.measurement_running = True
 
 
 def render_pre_measure_view(
@@ -101,7 +187,9 @@ def render_pre_measure_view(
             )
     with right:
         st.write("あなたのうごき")
-        render_webcam_panel(max_width_px=PANEL_MAX_WIDTH_PX)
+        # 計測フェーズでは JS カメラを停止し、streamlit-webrtc で
+        # MediaPipe ランドマーク取得を行うカメラに切り替える。
+        _render_webrtc_camera(exercise)
 
     # JS アニメーション注入（多重起動は JS 側のフラグで防止）
     # 計測時間 = exercise.get_measure_duration()（四捨五入）
