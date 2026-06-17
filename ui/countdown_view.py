@@ -79,7 +79,7 @@ def render_countdown_view(
     with left:
         st.write("おてほんどうが")
         render_video_panel(
-            video_path=str(exercise.video_path),
+            video_filename=exercise.video_path.name,
             autoplay=True,
             loop=True,
             max_width_px=PANEL_MAX_WIDTH_PX,

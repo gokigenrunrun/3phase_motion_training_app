@@ -79,7 +79,7 @@ def render_measure_view(
         if exercise.uses_segmented_video:
             # 計測区間（0〜measure_video_end 秒）を 1 回再生して停止する
             render_video_panel(
-                video_path=str(exercise.video_path),
+                video_filename=exercise.video_path.name,
                 autoplay=True,
                 seek_to=0.0,
                 stop_at=exercise.get_measure_video_end(),
@@ -88,7 +88,7 @@ def render_measure_view(
             )
         else:
             render_video_panel(
-                video_path=str(exercise.video_path),
+                video_filename=exercise.video_path.name,
                 autoplay=True,
                 loop=True,
                 max_width_px=PANEL_MAX_WIDTH_PX,

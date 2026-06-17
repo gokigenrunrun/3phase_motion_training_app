@@ -323,7 +323,7 @@ def render_training_stage(
     with left:
         st.markdown('<div class="media-title">お手本動画</div>', unsafe_allow_html=True)
         render_video_panel(
-            video_path=str(exercise.video_path),
+            video_filename=exercise.video_path.name,
             autoplay=True,
             loop=video_loop,
             max_width_px=PANEL_MAX_WIDTH_PX,

@@ -1,0 +1,4 @@
+[server]
+# static/ ディレクトリを /app/static/ で HTTP 配信する（お手本動画の配信用）。
+# base64 埋め込みをやめ、ブラウザキャッシュを活用するために有効化している。
+enableStaticServing = true

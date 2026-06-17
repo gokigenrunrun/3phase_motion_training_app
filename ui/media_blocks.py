@@ -1,5 +1,4 @@
-import base64
-from pathlib import Path
+import json
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -9,19 +8,9 @@ PANEL_MAX_WIDTH_PX = 420
 PANEL_HEIGHT_PX = int(PANEL_MAX_WIDTH_PX * 4 / 3)
 
 
-@st.cache_data(show_spinner=False)
-def _load_video_base64(video_path: str, mtime_ns: int) -> str:
-    """ローカル動画を base64 文字列として返す（components.html 埋め込み用）。
-
-    mtime_ns をキャッシュキーに含めることで、ファイル差し替え時に
-    自動でキャッシュを無効化する。
-    """
-    return base64.b64encode(Path(video_path).read_bytes()).decode("utf-8")
-
-
 def render_video_panel(
     *,
-    video_path: str,
+    video_filename: str,
     autoplay: bool,
     loop: bool = False,
     loop_count: int = 1,
@@ -47,10 +36,11 @@ def render_video_panel(
     Chrome の自動再生ポリシーをかいくぐるために以下を全て満たす:
     - autoplay 属性 + muted 属性 + playsinline 属性
     - JS で .play() を強制 + ユーザー操作でアンロック
-    """
-    p = Path(video_path)
-    video_b64 = _load_video_base64(str(p), p.stat().st_mtime_ns)
 
+    動画は static/ から HTTP 配信する（/app/static/{video_filename}）。
+    base64 埋め込みをやめたことでブラウザキャッシュが効き、画面遷移ごとの
+    再転送がなくなる。
+    """
     segmented = stop_at is not None
 
     if segmented:
@@ -188,7 +178,7 @@ def render_video_panel(
                 playsinline
                 preload="auto"
             >
-                <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
+                <source src="/app/static/{video_filename}" type="video/mp4">
             </video>
         </div>
         <script>
@@ -408,6 +398,249 @@ def render_webcam_panel(*, max_width_px: int = PANEL_MAX_WIDTH_PX) -> None:
         """,
         height=0,
     )
+
+
+def render_demo_video_once(*, video_filename: str, exercise_key: str) -> None:
+    """お手本動画の <video> を parent.document に一度だけ作成して永続化する。
+
+    Streamlit の rerun では parent.document.body は破棄されないため、ここで
+    作った video 要素と再生位置（currentTime）は rerun をまたいで保持される。
+    （カメラの render_camera_once と同じ永続化テクニック。）
+
+    iframe は components.html() 呼び出しごとに作り直されるが、video 本体は
+    parent 側にあるので、DEMO→PRE_MEASURE の遷移で st.rerun() が走っても
+    動画が最初から読み込み直されることがない。
+
+    動画は static/ から HTTP 配信する（/app/static/{video_filename}）。
+    base64 埋め込みをやめたことでブラウザキャッシュが効き、同じ種目なら
+    2 回目以降は瞬時に読み込まれる。読み込み済みの種目キーを
+    session_state で管理し、同じ種目なら src を再設定しない。
+    """
+    already_loaded = (
+        st.session_state.get("_demo_video_loaded_key") == exercise_key
+    )
+
+    if already_loaded:
+        # src 再設定なし（既に parent に読み込み済み）
+        src_js = ""
+    else:
+        video_src = f"/app/static/{video_filename}"
+        src_js = (
+            "if (video.dataset.exerciseKey !== KEY) {"
+            "  video.dataset.exerciseKey = KEY;"
+            "  video.pause();"
+            f"  video.src = {json.dumps(video_src)};"
+            "  try { video.load(); } catch (e) {}"
+            "  video.addEventListener('loadedmetadata', function() {"
+            "    try { video.currentTime = 0; } catch (e) {}"
+            "  }, { once: true });"
+            "}"
+        )
+        st.session_state["_demo_video_loaded_key"] = exercise_key
+
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            var pdoc = window.parent.document;
+            var KEY = {json.dumps(exercise_key)};
+
+            var video = pdoc.getElementById('persistentDemoVideo');
+            if (!video) {{
+                // parent.body に隠し video を一度だけ作成（rerun で破棄されない）
+                var container = pdoc.createElement('div');
+                container.id = 'persistentDemoContainer';
+                container.style.cssText =
+                    'position:absolute;left:-9999px;top:-9999px;' +
+                    'width:1px;height:1px;visibility:hidden;';
+                video = pdoc.createElement('video');
+                video.id = 'persistentDemoVideo';
+                video.muted = true;
+                video.defaultMuted = true;
+                video.playsInline = true;
+                video.setAttribute('playsinline', '');
+                video.setAttribute('muted', '');
+                video.preload = 'auto';
+                container.appendChild(video);
+                pdoc.body.appendChild(container);
+            }}
+            {src_js}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def _build_demo_control_js(phase: str, exercise, delay_ms: int) -> str:
+    """フェーズ別に永続 video の currentTime / play / pause を制御する JS を返す。
+
+    DEMO        : 0 秒から再生し demo_duration 秒で停止
+    PRE_MEASURE : demo_duration 秒で静止 → delay_ms 後に 0 秒から再生し
+                  measure_video_end 秒で停止
+    MEASURE     : 0 秒から再生し measure_video_end 秒で停止
+    JS は単一波括弧で書く（呼び出し側の f-string にはプレースホルダ置換で
+    埋め込むため、ここでブレースをエスケープする必要はない）。
+    """
+    if phase == "pre_measure":
+        return (
+            "var DEMO_END=%f, V_END=%f, DELAY=%d;"
+            "function holdAt(){ try{video.currentTime=DEMO_END;}catch(e){} video.pause(); }"
+            "if (video.readyState>=1) holdAt();"
+            "else video.addEventListener('loadedmetadata', holdAt, {once:true});"
+            "setTimeout(function(){"
+            "  try{video.currentTime=0;}catch(e){}"
+            "  var pr=video.play(); if(pr&&pr.catch) pr.catch(function(){});"
+            "}, DELAY);"
+            "function chkM(){ if(video.currentTime>=V_END){ video.pause(); return; }"
+            "  requestAnimationFrame(chkM); }"
+            "requestAnimationFrame(chkM);"
+        ) % (exercise.demo_duration, exercise.get_measure_video_end(), delay_ms)
+
+    if phase == "measure":
+        return (
+            "var V_END=%f;"
+            "function startM(){ try{video.currentTime=0;}catch(e){}"
+            "  var pr=video.play(); if(pr&&pr.catch) pr.catch(function(){}); }"
+            "if (video.readyState>=1) startM();"
+            "else video.addEventListener('loadedmetadata', startM, {once:true});"
+            "function chkM(){ if(video.currentTime>=V_END){ video.pause(); return; }"
+            "  requestAnimationFrame(chkM); }"
+            "requestAnimationFrame(chkM);"
+        ) % (exercise.get_measure_video_end(),)
+
+    # 既定: DEMO
+    return (
+        "var STOP=%f;"
+        "function startDemo(){ try{video.currentTime=0;}catch(e){}"
+        "  var pr=video.play(); if(pr&&pr.catch) pr.catch(function(){}); }"
+        "if (video.readyState>=1) startDemo();"
+        "else video.addEventListener('loadedmetadata', startDemo, {once:true});"
+        "function chkD(){ if(video.currentTime>=STOP){ video.pause(); return; }"
+        "  requestAnimationFrame(chkD); }"
+        "requestAnimationFrame(chkD);"
+    ) % (exercise.demo_duration,)
+
+
+def render_demo_video_panel(
+    *,
+    exercise,
+    phase: str,
+    delay_before_play: float = 0.0,
+    max_width_px: int = PANEL_MAX_WIDTH_PX,
+) -> None:
+    """永続 video を canvas に描画しつつ、フェーズ別に再生位置を制御する。
+
+    video 要素そのものは render_demo_video_once() で parent.document に
+    永続化されているため、このパネルが rerun で作り直されても動画は
+    リロードされない（canvas に現在フレームを描き続けるだけ）。
+
+    Args:
+        exercise:          現在の種目（uses_segmented_video=True 前提）
+        phase:             'demo' / 'pre_measure' / 'measure'
+        delay_before_play: PRE_MEASURE でカウントダウン終了まで待つ秒数
+        max_width_px:      パネル最大幅
+    """
+    # 1. 永続 video を用意（src は種目変更時のみ送る）
+    render_demo_video_once(
+        video_filename=exercise.video_path.name,
+        exercise_key=exercise.key,
+    )
+
+    # 2. 3:4 の canvas プレースホルダー（main DOM）
+    st.markdown(
+        f'<div id="demoVideoPlaceholder" '
+        f'style="width:min(100%, {max_width_px}px);aspect-ratio:3/4;'
+        f'margin:0 auto;background:#111;border-radius:8px;overflow:hidden;'
+        f'position:relative;">'
+        f'<canvas id="demoVideoCanvas" '
+        f'style="width:100%;height:100%;display:block;"></canvas>'
+        f'<div id="demoVideoLoading" style="position:absolute;top:50%;left:50%;'
+        f'transform:translate(-50%,-50%);color:#B5D4F4;font-size:14px;">'
+        f'どうが　よみこみちゅう...</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # 3. フェーズ別の再生制御 + canvas 描画ループ
+    control_js = _build_demo_control_js(
+        phase=phase,
+        exercise=exercise,
+        delay_ms=max(0, int(round(delay_before_play * 1000))),
+    )
+
+    panel_js = """
+        <script>
+        (function() {
+            var parent = window.parent;
+            var pdoc = parent.document;
+
+            // 永続 video が生成されるまで待ってから制御・描画を始める
+            function waitForVideo(attempt) {
+                var video = pdoc.getElementById('persistentDemoVideo');
+                if (!video) {
+                    if (attempt > 60) return;  // 約6秒で諦める
+                    setTimeout(function() { waitForVideo(attempt + 1); }, 100);
+                    return;
+                }
+                start(video);
+            }
+
+            function start(video) {
+            // ── フェーズ別 再生制御 ──
+            // __CONTROL_JS__
+
+            // ── 前回の描画ループを停止（多重ループ防止） ──
+            if (parent._demoDrawCancel) {
+                try { parent.cancelAnimationFrame(parent._demoDrawCancel); } catch (e) {}
+                parent._demoDrawCancel = null;
+            }
+
+            function tryDraw() {
+                var canvas = pdoc.getElementById('demoVideoCanvas');
+                var loading = pdoc.getElementById('demoVideoLoading');
+                if (!canvas) { setTimeout(tryDraw, 150); return; }
+                if (video.readyState < 2) {
+                    setTimeout(tryDraw, 150);
+                    return;
+                }
+                startDraw(canvas, loading);
+            }
+
+            function startDraw(canvas, loading) {
+                if (loading) loading.style.display = 'none';
+                var ctx = canvas.getContext('2d');
+                var ph = pdoc.getElementById('demoVideoPlaceholder');
+                function frame() {
+                    var w = ph ? ph.offsetWidth : canvas.offsetWidth;
+                    var h = ph ? ph.offsetHeight : canvas.offsetHeight;
+                    if (w > 0 && h > 0) {
+                        if (canvas.width !== w) canvas.width = w;
+                        if (canvas.height !== h) canvas.height = h;
+                        var vw = video.videoWidth || 0;
+                        var vh = video.videoHeight || 0;
+                        if (vw > 0 && vh > 0) {
+                            // object-fit: cover 相当（中央クロップ・反転なし）
+                            var ca = w / h, va = vw / vh, sx, sy, sw, sh;
+                            if (va > ca) { sh = vh; sw = vh * ca; sx = (vw - sw) / 2; sy = 0; }
+                            else { sw = vw; sh = vw / ca; sx = 0; sy = (vh - sh) / 2; }
+                            ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+                        }
+                    }
+                    parent._demoDrawCancel = parent.requestAnimationFrame(frame);
+                }
+                parent._demoDrawCancel = parent.requestAnimationFrame(frame);
+            }
+
+            setTimeout(tryDraw, 100);
+            }  // end start()
+
+            waitForVideo(0);
+        })();
+        </script>
+    """.replace("// __CONTROL_JS__", control_js)
+
+    components.html(panel_js, height=0)
 
 
 def get_panel_height(max_width_px: int = PANEL_MAX_WIDTH_PX) -> int:

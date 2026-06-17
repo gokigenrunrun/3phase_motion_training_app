@@ -4,7 +4,12 @@ import streamlit as st
 
 from exercises import Exercise
 from state import get_remaining_from_snapshot
-from ui.media_blocks import PANEL_MAX_WIDTH_PX, render_video_panel, render_webcam_panel
+from ui.media_blocks import (
+    PANEL_MAX_WIDTH_PX,
+    render_demo_video_panel,
+    render_video_panel,
+    render_webcam_panel,
+)
 from ui.styles import render_header
 
 
@@ -49,17 +54,17 @@ def render_demo_view(
     with left:
         st.write("おてほんどうが")
         if exercise.uses_segmented_video:
-            # 単一動画の DEMO 区間（0〜demo_duration 秒）だけ再生して停止する
-            render_video_panel(
-                video_path=str(exercise.video_path),
-                autoplay=True,
-                seek_to=0.0,
-                stop_at=exercise.demo_duration,
+            # 永続 video（parent.document）を canvas に描画。DEMO 区間
+            # （0〜demo_duration 秒）を再生して停止する。video 要素は rerun を
+            # またいで保持されるため、PRE_MEASURE 遷移時にリロードされない。
+            render_demo_video_panel(
+                exercise=exercise,
+                phase="demo",
                 max_width_px=PANEL_MAX_WIDTH_PX,
             )
         else:
             render_video_panel(
-                video_path=str(exercise.video_path),
+                video_filename=exercise.video_path.name,
                 autoplay=True,
                 loop=False,
                 loop_count=exercise.loop_count,

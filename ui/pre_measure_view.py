@@ -17,7 +17,12 @@ import streamlit.components.v1 as components
 
 from exercises import Exercise
 from state import get_remaining_from_snapshot
-from ui.media_blocks import PANEL_MAX_WIDTH_PX, render_video_panel, render_webcam_panel
+from ui.media_blocks import (
+    PANEL_MAX_WIDTH_PX,
+    render_demo_video_panel,
+    render_video_panel,
+    render_webcam_panel,
+)
 from ui.styles import render_header, speak
 
 
@@ -77,20 +82,19 @@ def render_pre_measure_view(
     with left:
         st.write("おてほんどうが")
         if exercise.uses_segmented_video:
-            # カウントダウン中は DEMO 終了位置（demo_duration 秒）で静止し、
-            # アニメーション終了後に 0 秒から計測区間（〜measure_video_end 秒）を再生する
-            render_video_panel(
-                video_path=str(exercise.video_path),
-                autoplay=False,
-                seek_to=exercise.demo_duration,
-                stop_at=exercise.get_measure_video_end(),
+            # 永続 video を canvas に描画。カウントダウン中は DEMO 終了位置
+            # （demo_duration 秒）で静止し、アニメーション終了後に 0 秒から
+            # 計測区間（〜measure_video_end 秒）を再生する。DEMO から同じ
+            # video 要素を使い続けるため、遷移時にリロードされない。
+            render_demo_video_panel(
+                exercise=exercise,
+                phase="pre_measure",
                 delay_before_play=PRE_MEASURE_ANIM_SECONDS,
-                play_from=0.0,
                 max_width_px=PANEL_MAX_WIDTH_PX,
             )
         else:
             render_video_panel(
-                video_path=str(exercise.video_path),
+                video_filename=exercise.video_path.name,
                 autoplay=True,
                 loop=True,
                 max_width_px=PANEL_MAX_WIDTH_PX,
