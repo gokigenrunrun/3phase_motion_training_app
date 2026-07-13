@@ -4,8 +4,9 @@
 # ============================================================
 
 # --- Web フレームワーク ---
-# @st.fragment は 1.33.0 で追加。1.35.0 以上を要求
-streamlit>=1.35.0
+# @st.fragment は 1.33.0 で追加。1.35.0 以上を要求。
+# data-testid セレクタに依存した CSS が多いため動作確認済みバージョンに固定。
+streamlit==1.58.0
 
 # --- データ処理 ---
 pandas>=2.0.0
@@ -14,26 +15,24 @@ numpy>=1.23.0
 
 # --- 可視化 ---
 matplotlib>=3.7.0
-seaborn>=0.12.0
 plotly>=5.18.0
 
 # --- 統計解析 ---
 scipy>=1.10.0
 
 # --- 姿勢推定 ---
-# 0.10.14 以降: numpy 2.x 対応 / Python 3.11 サポート確認済み
-mediapipe>=0.10.14
-opencv-python>=4.8.0
+# 0.10.14 に固定: 0.10.20 以降で mp.solutions API が削除されたため
+# cv2 は mediapipe が依存関係として opencv-contrib-python を導入するため、
+# 自前で opencv-python を追加指定しない（同時インストールすると
+# ファイルが競合し cv2 が壊れることを確認済み）。
+mediapipe==0.10.14
 
 # --- リアルタイムカメラ取得（計測時のランドマーク取得用） ---
 # streamlit-webrtc でブラウザのカメラ映像を Python 側に取り込み、
 # av(PyAV) で各フレームを ndarray 化して MediaPipe に渡す。
-streamlit-webrtc>=0.47.0
+# WebRTC カメラ表示のCSS/props周りを作り込んでいるため動作確認済みバージョンに固定。
+streamlit-webrtc==0.72.2
 av>=12.0.0
-
-# --- 設定ファイル読み込み ---
-# metrics_config.yaml の読み込みに使用
-pyyaml>=6.0.0
 
 # --- テスト ---
 pytest>=7.4.0

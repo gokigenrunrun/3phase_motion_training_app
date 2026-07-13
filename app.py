@@ -1,3 +1,12 @@
+"""アプリのエントリーポイント。
+
+Streamlit はスクリプト全体を毎回上から再実行する（rerun）方式のため、
+main() が呼ばれるたびに「現在の phase に応じた画面を描画する（route_view）」
+「フェーズの終了時刻を過ぎていれば次の phase へ進める（phase_controller）」
+を行う。フェーズの流れは
+READY → CAMERA_CHECK → (TRANSITION → DEMO → PRE_MEASURE) × 3種目 → FINISHED。
+"""
+
 import streamlit as st
 
 from database import init_db
@@ -35,7 +44,6 @@ from ui.camera_check_view import render_camera_check_view
 from ui.demo_view import render_demo_view
 from ui.finished_view import render_finished_view
 from ui.measure_view import render_measure_view
-from ui.media_blocks import render_camera_once
 from ui.pre_measure_view import render_pre_measure_view
 from ui.progress_indicator import render_progress_indicator
 from ui.ready_view import render_ready_view
@@ -79,7 +87,10 @@ def route_view() -> None:
         return
 
     if phase == PHASE_CAMERA_CHECK:
-        render_camera_check_view(on_confirm=handle_camera_confirm)
+        if exercise is None:
+            st.error("現在の動作を取得できませんでした。")
+            return
+        render_camera_check_view(on_confirm=handle_camera_confirm, exercise=exercise)
         return
 
     if phase == PHASE_FINISHED:
@@ -105,6 +116,9 @@ def route_view() -> None:
             phase_started_at=phase_started_at,
             phase_duration=phase_duration,
         )
+    # PHASE_START_DISPLAY / PHASE_MEASURE: 旧フローの名残。
+    # 現在の phase_controller() は TRANSITION→DEMO→PRE_MEASURE→(TRANSITION|FINISHED)
+    # としか遷移させないため、この2つの分岐は実行時には到達しない。
     elif phase == PHASE_START_DISPLAY:
         render_start_display_view(
             exercise=exercise,
@@ -165,15 +179,11 @@ def phase_controller() -> None:
 
 
 def main() -> None:
+    """アプリの1回の rerun で必ず実行される処理をまとめたエントリー関数。"""
     init_db()
     init_session_state()
     st.markdown(get_common_css(), unsafe_allow_html=True)
     play_bgm()
-    # カメラを一度だけ起動（rerun でも getUserMedia を再実行しない）。
-    # ただし PRE_MEASURE（計測フェーズ）では streamlit-webrtc が物理カメラを
-    # 掴むため、JS カメラの再取得をスキップして二重取得を避ける。
-    if st.session_state.get("phase") != PHASE_PRE_MEASURE:
-        render_camera_once()
     render_settings_button()
     render_settings_panel()
     # PRE_MEASURE 以外のフェーズでは JS タイマーの DOM 残骸をクリーンアップ

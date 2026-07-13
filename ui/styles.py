@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 # .env から GOOGLE_AI_API_KEY を読み込む（インポート時に1回だけ）
 try:
@@ -433,32 +432,41 @@ def play_bgm() -> None:
     """BGM をループ再生する。
 
     assets/audio/bgm.mp3 が存在し、かつ空ファイルでない場合のみ動作する。
-    <audio> 要素を **親ドキュメント (window.parent)** に追加することで
-    iframe が破棄されても再生が継続し、設定パネルから直接音量を変更できる。
-    自動再生がブロックされた場合は親ドキュメントの最初のクリック等で再試行する。
+    <audio> 要素を document.body に追加し window._bgmAudio で保持することで、
+    設定パネルから直接音量を変更できる。
+    自動再生がブロックされた場合は最初のクリック等で再試行する。
+
+    main() はフェーズ遷移のたびに毎回呼ばれるが、この関数が呼ばれるたびに
+    base64エンコードした音声データ（数MB）をブラウザへ送り直すと帯域を
+    無駄に消費する。<audio> 要素は document.body に直接追加され rerun を
+    またいで残り続けるため、初回のみ埋め込めば十分。session_state で
+    セッションにつき1回だけ st.html() を発行するようにガードする。
     """
+    if st.session_state.get("_bgm_embedded"):
+        return
+
     bgm_path = Path(__file__).resolve().parent.parent / "assets" / "audio" / "bgm.mp3"
     if not bgm_path.exists() or bgm_path.stat().st_size == 0:
         return
 
+    st.session_state._bgm_embedded = True
     bgm_b64 = _load_bgm_base64(str(bgm_path), bgm_path.stat().st_mtime_ns)
-    initial_volume = st.session_state.get("bgm_volume", 30) / 100
+    initial_volume = st.session_state.get("bgm_volume", 15) / 100
 
-    components.html(
+    st.html(
         f"""
         <script>
         (function() {{
             try {{
-                var parent = window.parent;
-                if (parent._bgmInit) return;
-                parent._bgmInit = true;
+                if (window._bgmInit) return;
+                window._bgmInit = true;
 
-                var audio = parent.document.createElement('audio');
+                var audio = document.createElement('audio');
                 audio.src = "data:audio/mp3;base64,{bgm_b64}";
                 audio.loop = true;
                 audio.volume = {initial_volume};
-                parent.document.body.appendChild(audio);
-                parent._bgmAudio = audio;
+                document.body.appendChild(audio);
+                window._bgmAudio = audio;
 
                 function tryPlay() {{
                     return audio.play()
@@ -470,19 +478,19 @@ def play_bgm() -> None:
                     if (ok) return;
                     var unlock = function() {{
                         tryPlay();
-                        parent.document.removeEventListener('click', unlock, true);
-                        parent.document.removeEventListener('keydown', unlock, true);
-                        parent.document.removeEventListener('touchstart', unlock, true);
+                        document.removeEventListener('click', unlock, true);
+                        document.removeEventListener('keydown', unlock, true);
+                        document.removeEventListener('touchstart', unlock, true);
                     }};
-                    parent.document.addEventListener('click', unlock, true);
-                    parent.document.addEventListener('keydown', unlock, true);
-                    parent.document.addEventListener('touchstart', unlock, true);
+                    document.addEventListener('click', unlock, true);
+                    document.addEventListener('keydown', unlock, true);
+                    document.addEventListener('touchstart', unlock, true);
                 }});
             }} catch (e) {{ console.error('play_bgm error:', e); }}
         }})();
         </script>
         """,
-        height=0,
+        unsafe_allow_javascript=True,
     )
 
 
@@ -497,26 +505,25 @@ def cleanup_measure_dom() -> None:
     残骸が画面に残り続ける問題を防ぐ。`_preMeasureRunning` フラグも
     リセットして、次回 PRE_MEASURE の JS が正しく起動できるようにする。
     """
-    components.html(
+    st.html(
         """
         <script>
         (function() {
             try {
-                var pdoc = window.parent.document;
                 ['_pmOverlay', '_pmTimer'].forEach(function(id) {
-                    var el = pdoc.getElementById(id);
+                    var el = document.getElementById(id);
                     if (el && el.parentNode) {
                         el.parentNode.removeChild(el);
                     }
                 });
-                if (window.parent._preMeasureRunning !== undefined) {
-                    window.parent._preMeasureRunning = false;
+                if (window._preMeasureRunning !== undefined) {
+                    window._preMeasureRunning = false;
                 }
             } catch (e) { /* 黙って無視 */ }
         })();
         </script>
         """,
-        height=0,
+        unsafe_allow_javascript=True,
     )
 
 
@@ -538,7 +545,7 @@ def _resolve_api_key() -> str | None:
 def speak(text: str, rate: float = 0.85, pitch: float = 1.1) -> None:
     """Google AI Studio (Gemini TTS) で日本語テキストを読み上げる。
 
-    生成した音声を base64 にして components.html() の iframe で再生する。
+    生成した音声を base64 にして st.html() で再生する。
     GOOGLE_AI_API_KEY が無い・SDK 失敗時は Web Speech API にフォールバック。
     同じテキストの連続読み上げは session_state で抑制する。
 
@@ -568,7 +575,7 @@ def speak(text: str, rate: float = 0.85, pitch: float = 1.1) -> None:
         audio_b64 = base64.b64encode(audio_bytes).decode()
         volume = st.session_state.get("speech_volume", 80) / 100
 
-        components.html(
+        st.html(
             f"""
             <script>
             (function() {{
@@ -582,7 +589,7 @@ def speak(text: str, rate: float = 0.85, pitch: float = 1.1) -> None:
             }})();
             </script>
             """,
-            height=0,
+            unsafe_allow_javascript=True,
         )
 
     except Exception as e:  # noqa: BLE001
@@ -716,36 +723,24 @@ def _pcm_to_wav(pcm_data: bytes, *, sample_rate: int, bits_per_sample: int, chan
 def _speak_web_speech(text: str, rate: float = 0.85, pitch: float = 1.1) -> None:
     """フォールバック用 Web Speech API での読み上げ（API キー無し or 失敗時）。"""
     safe_text = json.dumps(text, ensure_ascii=False)
-    components.html(
+    st.html(
         f"""
         <script>
         (function() {{
-            var parent = null, synth = null, Utterance = null;
-            try {{ parent = window.parent; }} catch (e) {{}}
-            try {{
-                synth = (parent && parent.speechSynthesis) || window.speechSynthesis;
-                Utterance = (parent && parent.SpeechSynthesisUtterance) || window.SpeechSynthesisUtterance;
-            }} catch (e) {{
-                synth = window.speechSynthesis;
-                Utterance = window.SpeechSynthesisUtterance;
-            }}
+            var synth = window.speechSynthesis;
+            var Utterance = window.SpeechSynthesisUtterance;
             if (!synth || !Utterance) return;
             synth.cancel();
             var u = new Utterance({safe_text});
             u.lang = 'ja-JP';
             u.rate = {rate};
             u.pitch = {pitch};
-            try {{
-                u.volume = (parent && parent._speechVolume !== undefined)
-                    ? parent._speechVolume : 0.8;
-            }} catch (e) {{
-                u.volume = 0.8;
-            }}
+            u.volume = (window._speechVolume !== undefined) ? window._speechVolume : 0.8;
             synth.speak(u);
         }})();
         </script>
         """,
-        height=0,
+        unsafe_allow_javascript=True,
     )
 
 
@@ -758,7 +753,7 @@ def _init_settings_state() -> None:
     if "show_settings" not in st.session_state:
         st.session_state.show_settings = False
     if "bgm_volume" not in st.session_state:
-        st.session_state.bgm_volume = 30
+        st.session_state.bgm_volume = 15
     if "speech_volume" not in st.session_state:
         st.session_state.speech_volume = 80
 
@@ -809,7 +804,7 @@ def render_settings_panel() -> None:
     """設定パネルを画面右側のサイドパネルとして表示する（position:fixed）。
 
     st.slider と st.button を使うことで、スライダー操作とボタン押下が即座に
-    session_state に反映される。BGM 音量は再生中の <audio> へ components.html
+    session_state に反映される。BGM 音量は再生中の <audio> へ st.iframe
     経由で同時反映する（st.markdown 内の <script> は Streamlit が剥がすため
     使用できない）。
     """
@@ -869,21 +864,19 @@ def render_settings_panel() -> None:
         )
         st.session_state.bgm_volume = bgm_vol
 
-        # 再生中の BGM <audio>（play_bgm が parent.window に張り付け）に
-        # 音量を即時反映する
-        components.html(
+        # 再生中の BGM <audio>（play_bgm が window に張り付け）に音量を即時反映する
+        st.html(
             f"""
             <script>
             (function() {{
                 try {{
-                    var p = window.parent;
-                    if (p && p._bgmAudio) p._bgmAudio.volume = {bgm_vol / 100};
-                    if (p) p._bgmVolume = {bgm_vol / 100};
+                    if (window._bgmAudio) window._bgmAudio.volume = {bgm_vol / 100};
+                    window._bgmVolume = {bgm_vol / 100};
                 }} catch (e) {{}}
             }})();
             </script>
             """,
-            height=0,
+            unsafe_allow_javascript=True,
         )
 
         # 読み上げ音量
@@ -898,16 +891,16 @@ def render_settings_panel() -> None:
         )
         st.session_state.speech_volume = speech_vol
 
-        # 次回の読み上げで参照する parent._speechVolume を更新
-        components.html(
+        # 次回の読み上げで参照する window._speechVolume を更新
+        st.html(
             f"""
             <script>
             (function() {{
-                try {{ window.parent._speechVolume = {speech_vol / 100}; }} catch (e) {{}}
+                try {{ window._speechVolume = {speech_vol / 100}; }} catch (e) {{}}
             }})();
             </script>
             """,
-            height=0,
+            unsafe_allow_javascript=True,
         )
 
         st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)

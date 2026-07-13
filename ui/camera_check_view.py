@@ -4,17 +4,24 @@ from typing import Callable
 
 import streamlit as st
 
-from ui.media_blocks import PANEL_MAX_WIDTH_PX, render_webcam_panel
+from exercises import Exercise
+from ui.pre_measure_view import render_webrtc_camera
 from ui.styles import render_header, speak
 
 
-def render_camera_check_view(on_confirm: Callable[[], None]) -> None:
+def render_camera_check_view(
+    on_confirm: Callable[[], None],
+    exercise: Exercise,
+) -> None:
     """計測前にカメラの画角を確認する画面を描画する。
 
     CSS は app.py の main() で注入済みのため、ここでは呼ばない。
+    ここで WebRTC 接続を確立し、以降 DEMO → PRE_MEASURE まで同じ
+    peer connection を維持することで接続待ちをなくす。
 
     Args:
         on_confirm: 「だいじょうぶ！」ボタン押下後のフェーズ遷移コールバック
+        exercise:   最初の種目（WebRTC の key に使用）
     """
     if st.session_state.get("last_spoken") != "camera_check":
         speak("カメラを かくにん しよう。からだ ぜんぶ うつっていますか？")
@@ -36,7 +43,8 @@ def render_camera_check_view(on_confirm: Callable[[], None]) -> None:
             "- あしをあげても　がめんに　おさまるか"
         )
     with right:
-        render_webcam_panel(max_width_px=PANEL_MAX_WIDTH_PX)
+        # DEMO・PRE_MEASURE でも同じ key で接続を維持する。
+        render_webrtc_camera(exercise, visible=True)
 
     st.button(
         "だいじょうぶ！",

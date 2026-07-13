@@ -37,6 +37,7 @@ class PoseCaptureProcessor(VideoProcessorBase):
     """
 
     def __init__(self):
+        """内部状態を初期化し、MediaPipe Pose モデルをロードする。"""
         self._lock = threading.Lock()
         self._capturing = False
         self._buffer = []       # list of dict
@@ -45,6 +46,8 @@ class PoseCaptureProcessor(VideoProcessorBase):
         self._end_time = None
 
         # MediaPipe Pose 初期化（軽量モード）
+        # model_complexity=1: 精度と速度のバランスが良い中間モデル（0=軽量, 2=高精度）を採用。
+        # confidence 系はいずれも 0.5: デフォルト推奨値で誤検出と未検出のバランスを取る。
         self._pose = mp.solutions.pose.Pose(
             model_complexity=1,
             min_detection_confidence=0.5,
@@ -70,6 +73,7 @@ class PoseCaptureProcessor(VideoProcessorBase):
 
     @property
     def is_capturing(self) -> bool:
+        """現在ランドマークを蓄積中かどうかを返す。"""
         with self._lock:
             return self._capturing
 
@@ -99,6 +103,7 @@ class PoseCaptureProcessor(VideoProcessorBase):
 
     @property
     def frame_count(self) -> int:
+        """これまでに蓄積したフレーム数（ランドマーク検出できたフレームのみ）を返す。"""
         with self._lock:
             return self._frame_idx
 
@@ -144,5 +149,6 @@ class PoseCaptureProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
     def __del__(self):
+        """インスタンス破棄時に MediaPipe Pose モデルのリソースを解放する。"""
         if hasattr(self, "_pose"):
             self._pose.close()

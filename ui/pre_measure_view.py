@@ -13,8 +13,8 @@ complete_measurement_phase を呼ぶ）。
 """
 
 import streamlit as st
-import streamlit.components.v1 as components
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
+from streamlit_webrtc.config import VideoHTMLAttributes
 
 from exercises import Exercise
 from logic.measurement import start_measurement
@@ -40,6 +40,23 @@ _RTC_CONFIGURATION = {
 # 区間再生の動画はこの時間だけ静止してから計測再生を開始する。
 PRE_MEASURE_ANIM_SECONDS = 4.5
 
+# 表示時の <video> スタイル。webrtc_streamer コンポーネントは iframe 内に
+# 描画されるため、親ページ側から st.markdown() で注入した CSS は内部の
+# <video> 要素に届かない。video_html_attrs はコンポーネントへの props として
+# iframe 内に直接反映されるため、こちらでサイズを明示する。
+_VISIBLE_VIDEO_HTML_ATTRS = VideoHTMLAttributes(
+    autoPlay=True,
+    muted=True,
+    playsInline=True,
+    style={
+        "width": "100%",
+        "height": "auto",
+        "maxHeight": "480px",
+        "objectFit": "contain",
+        "borderRadius": "12px",
+    },
+)
+
 
 @st.fragment(run_every=1.0)
 def _pre_measure_watcher(
@@ -60,80 +77,91 @@ def _pre_measure_watcher(
         st.rerun()
 
 
-def _stop_js_camera() -> None:
-    """JS カメラ（render_camera_once の永続 video）を停止・破棄する。
+def _ensure_pose_processor() -> PoseCaptureProcessor:
+    """PoseCaptureProcessor をセッションにつき1つだけ作成し、種目が変わっても使い回す。
 
-    streamlit-webrtc が同じ物理カメラを掴むため、二重取得を避ける。
-    _cameraInitialized を false に戻すことで、計測フェーズを抜けた後の
-    フェーズで app.py の render_camera_once が JS カメラを再取得できる。
-    （計測中は app.py 側が render_camera_once をスキップする。）
+    CAMERA_CHECK・DEMO・PRE_MEASURE すべてから呼ばれる。以前は種目キーが
+    変わるたびにインスタンスを破棄・再生成しており、MediaPipe Pose の
+    モデルロード（軽くない処理）が1セッションで最大3回発生していた。
+    ランドマークバッファは種目ごとに start_capture() が必ずリセットする
+    ため、インスタンス自体を使い回しても前の種目のデータが混ざることは
+    なく、破棄・再生成する理由がない。
     """
-    components.html(
-        """
-        <script>
-        (function() {
-            var parent = window.parent;
-            try {
-                if (parent._cameraStream) {
-                    parent._cameraStream.getTracks().forEach(function(t) { t.stop(); });
-                    parent._cameraStream = null;
-                    console.log('[camera] JS camera stopped for webrtc takeover');
-                }
-            } catch (e) { console.log('[camera] stop error:', e); }
-            parent._cameraInitialized = false;
-            // 描画ループも停止
-            try {
-                if (parent._cameraDrawCancel) {
-                    parent.cancelAnimationFrame(parent._cameraDrawCancel);
-                    parent._cameraDrawCancel = null;
-                }
-            } catch (e) {}
-            // 永続 video 要素を削除
-            try {
-                var container = parent.document.getElementById('persistentCamera');
-                if (container) container.remove();
-            } catch (e) {}
-        })();
-        </script>
-        """,
-        height=0,
-    )
+    if "pose_processor" not in st.session_state:
+        st.session_state.pose_processor = PoseCaptureProcessor()
+
+    return st.session_state.pose_processor
 
 
-def _render_webrtc_camera(exercise: Exercise) -> None:
-    """streamlit-webrtc でカメラ映像を表示し、ランドマークを取得する。
+def render_webrtc_camera(
+    exercise: Exercise,
+    *,
+    visible: bool = True,
+):
+    """全フェーズ共通の WebRTC カメラ描画。
 
-    - 先に JS カメラを停止して物理カメラを webrtc に明け渡す
-    - プロセッサが利用可能になったら、この PRE_MEASURE 突入につき 1 回だけ
-      計測（蓄積）を開始する
+    CAMERA_CHECK・DEMO・PRE_MEASURE のすべてで同じ key
+    (f"pose_capture_{exercise.key}") と同じ processor インスタンスを使うため、
+    Streamlit は同一コンポーネント・同一 peer connection として扱う。
+    これにより DEMO → PRE_MEASURE 遷移時の接続待ちがなくなる。
+    骨格は PoseCaptureProcessor 側で常に描画される。
+
+    Args:
+        exercise: 現在の種目
+        visible:  False の場合は画面外へ押し出す（接続・推論は継続する）
+
+    Returns:
+        webrtc_streamer() が返す WebRtcStreamerContext
     """
-    # JS カメラを停止（二重取得防止）
-    _stop_js_camera()
+    processor = _ensure_pose_processor()
 
-    webrtc_ctx = webrtc_streamer(
-        key="pose_capture",
-        mode=WebRtcMode.SENDRECV,
-        rtc_configuration=_RTC_CONFIGURATION,
-        video_processor_factory=PoseCaptureProcessor,
-        media_stream_constraints={
-            "video": {"width": 720, "height": 960},
-            "audio": False,
-        },
-        async_processing=True,
-    )
+    def _mount():
+        """visible/非visible どちらの分岐からも同じ引数で webrtc_streamer を呼ぶための内部ヘルパー。"""
+        return webrtc_streamer(
+            key=f"pose_capture_{exercise.key}",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=_RTC_CONFIGURATION,
+            video_processor_factory=lambda: processor,
+            media_stream_constraints={
+                "video": {"width": 720, "height": 960},
+                "audio": False,
+            },
+            video_html_attrs=_VISIBLE_VIDEO_HTML_ATTRS if visible else None,
+            async_processing=True,
+            desired_playing_state=True,
+        )
+
+    if visible:
+        webrtc_ctx = _mount()
+    else:
+        # 接続・推論は維持したまま、高さ1pxのコンテナに閉じ込めて視覚的に隠す。
+        # 以前は position:absolute + 汎用CSSセレクタ（[data-testid='stCustomComponentV1']）
+        # で画面外に押し出していたが、そのスタイルが rerun をまたいで残留し、
+        # 後続フェーズの「表示すべき」コンポーネントまで巻き込んで消してしまう
+        # 不具合があった。st.container はコンポーネントごとにスコープが閉じるため
+        # 他フェーズへ影響しない。display:none にしないのは iframe 内の JS/映像
+        # 処理を止めないため。
+        with st.container(height=1, border=False):
+            webrtc_ctx = _mount()
 
     # プロセッサ参照を session_state に保存（stop_measurement から参照する）
     if webrtc_ctx.video_processor:
         st.session_state._webrtc_ctx = webrtc_ctx
 
+    return webrtc_ctx
+
+
+def _render_measure_webrtc_camera(exercise: Exercise) -> None:
+    """PRE_MEASURE 専用: カメラを表示し、計測を開始する。"""
+    webrtc_ctx = render_webrtc_camera(exercise, visible=True)
+
+    if webrtc_ctx.video_processor:
         # この PRE_MEASURE 突入につき 1 回だけ計測を開始する。
         # phase_started_at をキーにして二重開始を防ぐ。
         started_key = st.session_state.get("phase_started_at")
         if st.session_state.get("_capture_started_at") != started_key:
             start_measurement(exercise)
             st.session_state._capture_started_at = started_key
-            # complete_measurement_phase で stop_measurement が呼ばれるよう、
-            # 計測中フラグを立てる。
             st.session_state.measurement_running = True
 
 
@@ -187,9 +215,9 @@ def render_pre_measure_view(
             )
     with right:
         st.write("あなたのうごき")
-        # 計測フェーズでは JS カメラを停止し、streamlit-webrtc で
-        # MediaPipe ランドマーク取得を行うカメラに切り替える。
-        _render_webrtc_camera(exercise)
+        # CAMERA_CHECK/DEMO から接続を引き継いだ WebRTC カメラを表示し、
+        # 骨格描画と計測記録を開始する。
+        _render_measure_webrtc_camera(exercise)
 
     # JS アニメーション注入（多重起動は JS 側のフラグで防止）
     # 計測時間 = exercise.get_measure_duration()（四捨五入）
@@ -197,9 +225,9 @@ def render_pre_measure_view(
         1,
         int(round(exercise.get_measure_duration())),
     )
-    components.html(
+    st.html(
         _build_animation_html(measure_duration=measure_duration),
-        height=0,
+        unsafe_allow_javascript=True,
     )
 
     # Python 側 watcher（1 秒ごとに残り時間チェック・0 で full rerun）
@@ -212,16 +240,15 @@ def render_pre_measure_view(
 def _build_animation_html(measure_duration: int) -> str:
     """カウントダウン → 移動アニメ → 計測タイマー の JS+HTML を返す。
 
-    DOM 要素は window.parent.document.body に append するので
-    iframe の枠を超えて画面全体を覆う・移動できる。
-    完了時は parent.location を変更せず DOM のクリーンアップだけ行う
+    DOM 要素は document.body に直接 append するため画面全体を覆う・移動できる。
+    完了時は DOM のクリーンアップだけ行う
     （フェーズ遷移は Python 側 watcher fragment が担当）。
     """
     return f"""
     <script>
     (function() {{
-        var parent = window.parent;
-        var pdoc = parent.document;
+        var parent = window;
+        var pdoc = document;
 
         // 多重起動防止
         if (parent._preMeasureRunning) return;
@@ -269,29 +296,17 @@ def _build_animation_html(measure_duration: int) -> str:
         var text = timer.querySelector('#_pmText');
         var inner = timer.querySelector('#_pmInner');
 
-        // 親ウィンドウの speechSynthesis を優先して使うヘルパー
+        // Web Speech API ヘルパー
         function speakJS(textVal) {{
-            var synth = null, Utterance = null;
-            try {{
-                synth = (parent && parent.speechSynthesis) || window.speechSynthesis;
-                Utterance = (parent && parent.SpeechSynthesisUtterance)
-                    || window.SpeechSynthesisUtterance;
-            }} catch (e) {{
-                synth = window.speechSynthesis;
-                Utterance = window.SpeechSynthesisUtterance;
-            }}
+            var synth = window.speechSynthesis;
+            var Utterance = window.SpeechSynthesisUtterance;
             if (!synth || !Utterance) return;
             synth.cancel();
             var u = new Utterance(textVal);
             u.lang = 'ja-JP';
             u.rate = 0.85;
             u.pitch = 1.1;
-            try {{
-                u.volume = (parent && parent._speechVolume !== undefined)
-                    ? parent._speechVolume : 0.8;
-            }} catch (e) {{
-                u.volume = 0.8;
-            }}
+            u.volume = (window._speechVolume !== undefined) ? window._speechVolume : 0.8;
             synth.speak(u);
         }}
 

@@ -14,6 +14,9 @@ def start_measurement(exercise: Exercise) -> None:
     """計測を開始する。
 
     webrtc_streamer のプロセッサの start_capture() を呼ぶ。
+
+    Args:
+        exercise: これから計測する種目（ログ出力にのみ使用）。
     """
     processor = _get_processor()
     if processor:
@@ -101,7 +104,14 @@ def build_real_result(exercise: Exercise) -> dict:
 
 
 def _exercise_to_action(exercise_key: str) -> str:
-    """種目キーから calculate_metrics の action 文字列に変換する。"""
+    """種目キーから calculate_metrics の action 文字列に変換する。
+
+    Args:
+        exercise_key: exercises.Exercise.key（"banzai"/"right_leg_raise"/"left_leg_raise"）。
+
+    Returns:
+        "right_leg" または "left_leg"。スコアレンジの選択に使われる。
+    """
     mapping = {
         "banzai": "right_leg",  # バンザイはデフォルトのスコアレンジを使用
         "right_leg_raise": "right_leg",
@@ -111,7 +121,15 @@ def _exercise_to_action(exercise_key: str) -> str:
 
 
 def _build_fallback_result(exercise: Exercise) -> dict:
-    """計測データがない場合のフォールバック結果。"""
+    """計測データがない場合のフォールバック結果。
+
+    Args:
+        exercise: 対象の種目。
+
+    Returns:
+        dict: build_real_result() と同じ形式で、metrics を全て NaN、
+            overall を "N/A" にしたもの。
+    """
     return {
         "exercise_key": exercise.key,
         "exercise_name": exercise.name,
@@ -128,7 +146,12 @@ def _build_fallback_result(exercise: Exercise) -> dict:
 
 
 def _get_processor():
-    """session_state から webrtc プロセッサを取得する。"""
+    """session_state から webrtc プロセッサを取得する。
+
+    Returns:
+        PoseCaptureProcessor | None: WebRTC 接続が確立し映像処理が
+            開始されていれば processor インスタンス、未接続なら None。
+    """
     ctx = st.session_state.get("_webrtc_ctx")
     if ctx is not None and getattr(ctx, "video_processor", None):
         return ctx.video_processor

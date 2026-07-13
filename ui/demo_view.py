@@ -8,8 +8,8 @@ from ui.media_blocks import (
     PANEL_MAX_WIDTH_PX,
     render_demo_video_panel,
     render_video_panel,
-    render_webcam_panel,
 )
+from ui.pre_measure_view import render_webrtc_camera
 from ui.styles import render_header
 
 
@@ -72,7 +72,9 @@ def render_demo_view(
             )
     with right:
         st.write("あなたのうごき")
-        render_webcam_panel(max_width_px=PANEL_MAX_WIDTH_PX)
+        # CAMERA_CHECK と同じ key で接続を維持したまま表示する
+        # （PRE_MEASURE への遷移時に読み込み待ちが発生しない）
+        render_webrtc_camera(exercise, visible=True)
 
     # iframe とは独立した fragment でフェーズ終了を監視する
     _demo_phase_watcher(phase_started_at=phase_started_at, phase_duration=phase_duration)

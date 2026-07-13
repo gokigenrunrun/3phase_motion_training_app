@@ -1,4 +1,15 @@
-"""結果発表画面（FINISHED フェーズ）。"""
+"""結果発表画面（FINISHED フェーズ）。
+
+3種目の計測結果（results）を受け取り、グレードバナー・種目別カード・
+アンケート・研究者向け詳細ビューを表示する。初回描画時に一度だけ DB へ
+結果を保存する（_save_results_to_db_once）。
+
+注意: 画面上部のグレードは全種目の全指標をまとめて平均した値から算出し、
+種目カードのグレードは build_real_result() 側で種目ごとに算出した値を
+そのまま使う。DB保存用のスコアもここでさらに別途平均を計算しており、
+「有限値の平均」という同じ処理が3箇所（本ファイルと scoring.py）に
+分散している。
+"""
 
 import os
 import tempfile
@@ -27,6 +38,8 @@ def render_finished_view(*, results: list[dict], on_restart: Callable[[], None])
         results:    各種目の計測結果リスト
         on_restart: 再スタートコールバック
     """
+    # 全種目・全指標をまとめて平均した点数からバナーのグレードを算出する
+    # （種目カードのグレードとは別計算。モジュール docstring 参照）
     avg_score = _compute_average_score(results)
     overall_grade = _score_to_grade(avg_score)
 
@@ -130,7 +143,7 @@ def _render_grade_banner(*, grade: str, score: float) -> None:
     with score_col:
         st.metric(label="ごうけい　てんすう", value=f"{score:.0f} てん")
     with diff_col:
-        diff_text, diff_color = _build_diff_text(current_score=score)
+        diff_text, diff_color = _build_diff_text()
         st.markdown(
             f'<div style="display:flex;align-items:center;justify-content:center;'
             f'height:100%;font-size:18px;font-weight:700;color:{diff_color};">'
@@ -139,28 +152,16 @@ def _render_grade_banner(*, grade: str, score: float) -> None:
         )
 
 
-def _build_diff_text(*, current_score: float) -> tuple[str, str]:
-    """前回スコアと比較し、表示テキストと色を返す。"""
-    subject_id = st.session_state.get("subject_id")
-    current_session_id = st.session_state.get("session_id")
-    if not subject_id or current_session_id is None:
-        return ("はじめての　チャレンジ！", COLOR_BLUE_DARK)
+def _build_diff_text() -> tuple[str, str]:
+    """前回比較欄に表示する固定メッセージを返す。
 
-    sessions = database.get_session_history(subject_id)
-    previous = next((s for s in sessions if s["id"] != current_session_id), None)
-    if previous is None:
-        return ("はじめての　チャレンジ！", COLOR_BLUE_DARK)
-
-    previous_score = database.get_session_overall_score(previous["id"])
-    if previous_score is None:
-        return ("はじめての　チャレンジ！", COLOR_BLUE_DARK)
-
-    diff = current_score - previous_score
-    if diff > 0.5:
-        return (f"▲ {diff:.0f}てん　あがったよ！", COLOR_ORANGE)
-    if diff < -0.5:
-        return (f"▼ {abs(diff):.0f}てん　さがったね", COLOR_BLUE_MID)
-    return ("ぜんかいと　おなじくらい", COLOR_BLUE_DARK)
+    被験者番号入力を廃止し session_state.subject_id が常に空文字になったため、
+    DB 上で「同一人物の前回セッション」を安全に特定する手段がない。
+    以前は subject_id で database.get_session_history() を横断検索していたが、
+    誤って別人のスコアと比較してしまう事故を避けるため、この横断検索は行わず
+    回数に依存しない中立な固定メッセージのみを返す。
+    """
+    return ("よく　がんばったね！", COLOR_BLUE_DARK)
 
 
 # -------------------------------------------------------
