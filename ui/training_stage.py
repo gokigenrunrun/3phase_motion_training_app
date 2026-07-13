@@ -1,3 +1,9 @@
+"""全フェーズを1画面にまとめて描画する旧バージョンの統合ビュー。
+
+app.py からは import されておらず、現在の phase 別ビュー（ui/*_view.py）
+分割構成に置き換わっている（未使用）。
+"""
+
 import math
 import time
 
@@ -436,6 +442,7 @@ def render_camera_check_layout(*, on_confirm) -> None:
 
 
 def _get_remaining_seconds(*, phase_started_at: float | None, phase_duration: float) -> int:
+    """フェーズ開始時刻と長さから、残り秒数を切り上げで返す。"""
     if phase_started_at is None:
         return max(0, math.ceil(phase_duration))
     elapsed = max(0.0, time.time() - phase_started_at)
@@ -443,6 +450,7 @@ def _get_remaining_seconds(*, phase_started_at: float | None, phase_duration: fl
 
 
 def _get_remaining_progress(*, remaining_seconds: int, phase_duration: float) -> int:
+    """残り秒数をプログレスバー用の 0〜100 のパーセントに変換する。"""
     if phase_duration <= 0:
         return 0
     return max(0, min(100, round((remaining_seconds / phase_duration) * 100)))

@@ -44,6 +44,8 @@ def score_from_frame_metrics(
     scores: Dict[str, float] = {}
     for col in SCORE_COLUMNS:
         if col == "banzai_score":
+            # banzai_score は evaluate_banzai_pose_auto() 由来の別スケールの値のため、
+            # 他の6指標と同じ scale_score() では変換せず採点対象から除外する。
             continue
         if col not in frame_df.columns:
             scores[col] = float("nan")

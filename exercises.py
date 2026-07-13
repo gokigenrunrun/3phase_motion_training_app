@@ -1,3 +1,10 @@
+"""計測する3種目（バンザイ・右足あげ・左足あげ）の定義モジュール。
+
+Exercise データクラスで各種目の動画パス・再生時間・計測時間を管理し、
+モジュール読み込み時に EXERCISES リストとしてインスタンス化する。
+state.py はこのリストの順番どおりに種目を進行させる。
+"""
+
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,6 +98,8 @@ def _build_exercise(
     measure_duration: float | None = None,
     measure_video_end: float | None = None,
 ) -> Exercise:
+    """Exercise を組み立てるヘルパー。demo_duration 未指定時は動画ファイルの
+    実尺を ffprobe で自動取得する。"""
     video_path = ASSETS_DIR / filename
     # demo_duration を明示した種目（バンザイ）は ffprobe を使わず指定値を採用。
     # 未指定の種目は従来どおり動画全体の秒数を自動取得する。

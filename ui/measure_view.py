@@ -1,4 +1,10 @@
-"""計測画面（MEASURE フェーズ）。"""
+"""計測画面（MEASURE フェーズ）。
+
+注意: 現在の app.py の phase_controller() は PRE_MEASURE から直接
+TRANSITION/FINISHED へ遷移させるため、MEASURE フェーズには実行時には
+到達しない（PRE_MEASURE が JS 側でカウントダウンと計測を一体化して
+担当するようになったため）。
+"""
 
 import streamlit as st
 

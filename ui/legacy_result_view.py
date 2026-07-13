@@ -1,3 +1,16 @@
+"""研究者向けの旧アプリ（Physical-assessment-web）風の詳細結果ビュー。
+
+ui/finished_view.py の「くわしい けっか（けんきゅうしゃ よう）」
+エキスパンダー内から render_legacy_result_view() のみが呼ばれる。
+ドーナツチャート・レーダーチャート・指標別フィードバックカードなど、
+旧アプリのUIをできるだけ再現したもの。
+
+注意: LEGACY_APP_ROOT は開発者のローカルマシン上の絶対パス
+（CLAUDE.md の「既知の問題」に記載の通り、他環境には存在しない）。
+参照先の violin_data.py が無い場合は空データにフォールバックするため、
+アプリの動作自体は壊れない。
+"""
+
 import base64
 import math
 from html import escape
@@ -283,6 +296,11 @@ body {background-color:#FFFFFF;}
 
 
 def load_legacy_violin_data() -> Dict[str, Dict[str, Any]]:
+    """旧アプリの violin_data.py（母集団分布データ）を動的 import で読み込む。
+
+    ファイルが存在しない環境（LEGACY_APP_ROOT は開発者ローカルパス）では
+    空辞書を返し、以降の分布比較系の描画はスキップされる。
+    """
     violin_path = LEGACY_APP_ROOT / "violin_data.py"
     if not violin_path.exists():
         return {}
@@ -298,10 +316,12 @@ VIOLIN_DATA = load_legacy_violin_data()
 
 
 def inject_research_ui_styles() -> None:
+    """このビュー専用の CSS（RESEARCH_UI_CSS）を注入する。"""
     st.markdown(RESEARCH_UI_CSS, unsafe_allow_html=True)
 
 
 def describe_total_score(score: float) -> Tuple[str, str, str]:
+    """総合スコアを SCORE_TIER_RULES と照合し、(色, ラベル, コメント) を返す。"""
     if not np.isfinite(score):
         return DEFAULT_SCORE_COLOR, DEFAULT_SCORE_LABEL, DEFAULT_SCORE_MESSAGE
     for threshold, color, label, message in SCORE_TIER_RULES:
@@ -311,6 +331,7 @@ def describe_total_score(score: float) -> Tuple[str, str, str]:
 
 
 def select_metric_feedback(metric_key: str, score: float) -> str:
+    """指標キーとスコアから、high/mid/low いずれかの定型フィードバック文を選ぶ。"""
     template = METRIC_FEEDBACK_TEMPLATES.get(metric_key, DEFAULT_FEEDBACK_TEMPLATE)
     if not np.isfinite(score):
         return "データが不足しているため評価できません。"
@@ -322,6 +343,7 @@ def select_metric_feedback(metric_key: str, score: float) -> str:
 
 
 def render_score_block(score: float, label: str, comment_text: str) -> None:
+    """画面上部の総合スコア表示ブロック（ラベルバッジ＋大きな点数＋コメント）を描画する。"""
     if np.isfinite(score):
         if score < 50:
             label_bg, label_border, label_color = "#FEE2E2", "#EF4444", "#991B1B"
@@ -372,6 +394,7 @@ def render_score_block(score: float, label: str, comment_text: str) -> None:
 
 
 def make_donut_chart(score: float, color: str = "#3B82F6") -> go.Figure:
+    """スコアを表すドーナツ型の Plotly 円グラフを作成する。"""
     safe_score = float(np.clip(score if np.isfinite(score) else 0.0, 0.0, 100.0))
     remainder = max(0.0, 100.0 - safe_score)
     fig = go.Figure(
@@ -394,6 +417,7 @@ def make_donut_chart(score: float, color: str = "#3B82F6") -> go.Figure:
 
 
 def _fallback_donut_image(score: float, color: str) -> str:
+    """plotly の to_image()（kaleido）が使えない環境向けに、SVGで同等のドーナツ画像を手作りする。"""
     safe_score = float(np.clip(score if np.isfinite(score) else 0.0, 0.0, 100.0))
     radius = 46
     circumference = 2 * math.pi * radius
@@ -411,6 +435,11 @@ def _fallback_donut_image(score: float, color: str) -> str:
 
 
 def render_metric_card_html(title: str, score: float, comment: str) -> str:
+    """1指標分のカード（ドーナツ画像＋点数＋コメント）のHTML文字列を組み立てる。
+
+    バンザイ姿勢のカードだけは固定の補足アドバイス2行を追加し、
+    長文用のレイアウト（card_modifier=" long"）を使う。
+    """
     display_value = float(score) if np.isfinite(score) else np.nan
     score_for_chart = float(np.clip(display_value, 0.0, 100.0)) if np.isfinite(display_value) else 0.0
     card_color = "#3B82F6"
@@ -460,6 +489,7 @@ def render_metric_card_html(title: str, score: float, comment: str) -> str:
 
 
 def build_summary_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
+    """表示用に result_df を整形する（列名が重複した banzai_score 列を除去）。"""
     if result_df is None or result_df.empty:
         return result_df
     display_df = result_df.copy()
@@ -470,11 +500,14 @@ def build_summary_display_df(result_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _prepare_population(values: Any) -> np.ndarray:
+    """配列から有限値だけを取り出す（分布図の母集団データ整形用）。"""
     arr = np.asarray(values, dtype=float)
     return arr[np.isfinite(arr)]
 
 
 def _normalized_density(samples: np.ndarray, xs: np.ndarray) -> Optional[np.ndarray]:
+    """サンプル集合からカーネル密度推定（scipy無ければヒストグラム近似）し、
+    ピークが1になるよう正規化した密度配列を返す。"""
     if samples.size < 2:
         return None
     if np.allclose(samples, samples[0]):
@@ -503,6 +536,11 @@ def compute_side_metric_series(
     frame_scores_df: Optional[pd.DataFrame],
     metric_names: Iterable[str],
 ) -> pd.Series:
+    """フレームごとの指標 DataFrame から、左右の脚あげフェーズ別の平均値を計算する。
+
+    Returns:
+        pd.Series: キーは "{metric}_{right|left}" 形式。
+    """
     if frame_scores_df is None or frame_scores_df.empty or "action" not in frame_scores_df.columns:
         return pd.Series(dtype=float)
 
@@ -526,6 +564,7 @@ def compute_side_metric_series(
 
 
 def render_metric_feedback_cards(result_row: pd.Series, violin_data: Optional[Dict[str, Any]] = None) -> None:
+    """7指標分のフィードバックカード（バンザイ姿勢＋6指標）をグリッド表示する。"""
     st.markdown(
         '<div class="section-title">🧩 '
         '<ruby>詳細<rt>しょうさい</rt></ruby>'
@@ -546,6 +585,7 @@ def render_metric_feedback_cards(result_row: pd.Series, violin_data: Optional[Di
         return
 
     def card_html(metric_key: str, title: str) -> str:
+        """指標キーからスコアとフィードバックを引いて1カード分のHTMLを作る内部ヘルパー。"""
         score_val = float(result_row.get(f"{metric_key}_score", np.nan))
         feedback = select_metric_feedback(metric_key, score_val)
         return render_metric_card_html(title, score_val, feedback)
@@ -581,6 +621,7 @@ def render_metric_feedback_cards(result_row: pd.Series, violin_data: Optional[Di
 
 
 def build_frame_chart(frame_scores: pd.DataFrame) -> go.Figure:
+    """フレームごとの各指標スコアを折れ線で重ね描きし、脚あげフェーズを背景色で示す図を作る。"""
     fig = go.Figure()
     if frame_scores.empty or "frame" not in frame_scores.columns:
         return fig
@@ -615,6 +656,11 @@ def build_frame_chart(frame_scores: pd.DataFrame) -> go.Figure:
 
 
 def build_dummy_result_df(results: Optional[list[dict]] = None) -> pd.DataFrame:
+    """このビュー用の1行サマリ DataFrame を作る（研究者ビューのフォールバック表示用）。
+
+    results（build_real_result() 由来の実測結果）が渡されればその平均との
+    差分でダミー値を底上げ/底下げする。渡されなければ固定のダミー値のみ。
+    """
     score_values = {
         "head_movement_score": 82.0,
         "shoulder_tilt_score": 78.5,
@@ -640,6 +686,7 @@ def build_dummy_result_df(results: Optional[list[dict]] = None) -> pd.DataFrame:
 
 
 def build_dummy_frame_scores_df() -> pd.DataFrame:
+    """フレーム推移グラフ表示用に、4つの脚あげフェーズ区間分のダミーフレームデータを作る。"""
     rows = []
     actions = [
         ("right_leg_1", 15, 29),
@@ -763,6 +810,8 @@ def render_score_history_chart(history_df: Optional[pd.DataFrame]) -> None:
 
 
 def build_dummy_result_payload(results: Optional[list[dict]] = None) -> Dict[str, Any]:
+    """render_legacy_result_view() が必要とする一式（result_df/frame_scores_df等）を
+    ダミーデータとしてまとめて生成する。session_state に payload が無い場合のフォールバック。"""
     result_df = build_dummy_result_df(results)
     frame_scores_df = build_dummy_frame_scores_df()
     current_score = float(result_df.iloc[0].get("total_score", np.nan)) if not result_df.empty else np.nan
@@ -777,6 +826,7 @@ def build_dummy_result_payload(results: Optional[list[dict]] = None) -> Dict[str
 
 
 def _build_dummy_pose_csv_bytes() -> bytes:
+    """「ポーズデータCSV出力」ボタン用のダミー CSV バイト列を作る。"""
     pose_df = pd.DataFrame(
         [
             {"frame": frame, "landmark_index": landmark, "x": 0.4 + landmark * 0.01, "y": 0.5, "z": 0.0}
@@ -788,6 +838,7 @@ def _build_dummy_pose_csv_bytes() -> bytes:
 
 
 def get_legacy_result_payload(results: Optional[list[dict]] = None) -> Dict[str, Any]:
+    """session_state に保存済みの payload があればそれを、無ければダミー payload を返す。"""
     payload = st.session_state.get("legacy_result_payload")
     if isinstance(payload, dict) and payload.get("result_df") is not None:
         return payload
@@ -795,6 +846,16 @@ def get_legacy_result_payload(results: Optional[list[dict]] = None) -> Dict[str,
 
 
 def render_legacy_result_view(*, results: Optional[list[dict]] = None, on_restart: Callable[[], None]) -> None:
+    """研究者向け詳細結果ビューのエントリー関数。
+
+    総合スコアブロック → スコア推移グラフ → レーダーチャート →
+    指標別フィードバックカード → 詳細スコア表 → CSVダウンロードの順に描画する。
+    ui/finished_view.py のエキスパンダー内から呼ばれる。
+
+    Args:
+        results:    build_real_result() 由来の各種目の結果リスト（省略可）。
+        on_restart: 「もう一度測定する」ボタン押下時のコールバック。
+    """
     inject_research_ui_styles()
     payload = get_legacy_result_payload(results)
     result_df = payload.get("result_df")

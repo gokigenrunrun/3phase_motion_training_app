@@ -1,3 +1,12 @@
+"""アプリのフェーズ（画面状態）管理モジュール。
+
+st.session_state に現在の phase・種目インデックス・計測状態などを保持し、
+フェーズの切り替え（set_phase 系関数）と、各フェーズの長さの算出
+（get_duration_for_phase）を担当する。実際にどの phase からどの phase へ
+遷移するかは app.py の phase_controller() が判定し、ここの transition_to_*
+関数を呼び出す。
+"""
+
 import time
 from typing import Callable
 
@@ -200,6 +209,11 @@ def transition_to_pre_measure() -> None:
     set_phase(PHASE_PRE_MEASURE)
 
 
+# --- 以下3関数は旧フロー（COUNTDOWN/START_DISPLAY/MEASURE を独立フェーズとして
+#     経由する流れ）の名残。現在の phase_controller() からは呼ばれておらず、
+#     実行時には到達しない（PRE_MEASURE が JS 側でカウントダウンと計測を
+#     まとめて担当するようになったため）。---
+
 def transition_to_start_display() -> None:
     """PRE_MEASURE 終了後、Start!! 表示の 2 秒間 (START_DISPLAY) に入ります。"""
 
@@ -240,6 +254,7 @@ def complete_measurement_phase(
         stop_measurement_fn()
 
     st.session_state.measurement_running = False
+    st.session_state.recording_started = False
     # 計測データから実スコアを生成（データが無ければ内部で N/A にフォールバック）
     st.session_state.results.append(build_real_result(exercise=exercise))
     st.session_state.last_completed_exercise = exercise.name
@@ -270,7 +285,11 @@ def complete_measurement_phase(
 
 
 def build_dummy_result(exercise: Exercise) -> dict:
-    """本計測ロジックが入るまでの結果表示用ダミーデータです。"""
+    """本計測ロジックが入るまでの結果表示用ダミーデータです。
+
+    現在は logic.measurement.build_real_result() が実データから結果を
+    生成するため、この関数自体はどこからも呼ばれていない（未使用）。
+    """
 
     base_scores = {
         "banzai": {

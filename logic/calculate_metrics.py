@@ -1,3 +1,15 @@
+"""MediaPipe ランドマークの DataFrame から運動指標を計算するモジュール。
+
+旧アプリ（Physical-assessment-web）のロジックを移植したもの。
+主な処理の流れ:
+  1. preprocess_landmarks() / load_pose_dataframe(): 生データの前処理
+     （列名統一・座標正規化・visibility フィルタ・欠損補間）
+  2. calculate_metrics_by_frame(): フレームごとの各指標を計算
+  3. score_from_frame_metrics()（logic/scoring.py）: 指標を0〜100点に変換
+
+ライブ計測（webrtc）と、CSVアップロードでの一括計算の両方から使われる。
+"""
+
 import json
 import numpy as np
 import pandas as pd
@@ -6,6 +18,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 import matplotlib.pyplot as plt
 
+# スコア化の対象となる指標名の一覧。banzai_score は評価用に計算はされるが
+# 現状 scoring.score_from_frame_metrics() では採点に使われていない。
 SCORE_COLUMNS: List[str] = [
     "head_movement",
     "shoulder_tilt",
@@ -16,6 +30,9 @@ SCORE_COLUMNS: List[str] = [
     "banzai_score",
 ]
 
+# 各指標の (良いスコアになる値, 悪いスコアになる値) の範囲。
+# scoring.scale_score() で 0〜100 に線形変換する際の下限・上限として使う。
+# 右足あげ用（および banzai もこちらを流用）。
 DEFAULT_SCORE_RANGES_RIGHT: Dict[str, Tuple[float, float]] = {
     "head_movement": (0.005516483219872959, 0.053272474857389424),
 
@@ -28,6 +45,7 @@ DEFAULT_SCORE_RANGES_RIGHT: Dict[str, Tuple[float, float]] = {
     "banzai_score": (0.0, 100.0),
 }
 
+# 左足あげ用のスコアレンジ（構造は DEFAULT_SCORE_RANGES_RIGHT と同じ）。
 DEFAULT_SCORE_RANGES_LEFT: Dict[str, Tuple[float, float]] = {
     "head_movement": (0.004994789133149868, 0.031311599045372396),
 
@@ -41,12 +59,16 @@ DEFAULT_SCORE_RANGES_LEFT: Dict[str, Tuple[float, float]] = {
 }
 
 _MODULE_DIR = Path(__file__).resolve().parent
+# JSON ファイルが存在すれば DEFAULT_SCORE_RANGES_* を上書きできる仕組み
+# （load_score_ranges() 参照）。現状このリポジトリには JSON ファイルは
+# 配置されていないため、常にデフォルト値が使われる。
 _DEFAULT_SCORE_RANGE_FILES: Dict[str, Path] = {
     "right_leg": _MODULE_DIR / "score_ranges_right_leg.json",
     "left_leg": _MODULE_DIR / "score_ranges_left_leg.json",
 }
 _DEFAULT_ACTION_KEY = "right_leg"
 
+# 参照動画のフェーズ名（例: "right_leg_1"）を基底の action 名（"right_leg"）に変換する対応表。
 LEG_PHASE_BASE_MAP = {
     "right_leg_1": "right_leg",
     "right_leg_2": "right_leg",
@@ -79,6 +101,7 @@ def _coerce_range_pair(value: Union[Dict[str, float], Iterable[float]]) -> Optio
 
 
 def _load_ranges_from_json(path: Path) -> Dict[str, Tuple[float, float]]:
+    """JSON ファイルから指標ごとの (low, high) レンジ辞書を読み込む。"""
     with path.open("r", encoding="utf-8") as f:
         raw = json.load(f)
 
@@ -138,6 +161,7 @@ def get_score_range(metric: str, action: Optional[str] = None) -> Tuple[float, f
         return fallback_ranges[metric]
     raise KeyError(f"Unknown score range for metric '{metric}'")
 
+# CSV等で表記ゆれしやすい列名を正式名に統一するための対応表。
 COLUMN_ALIASES = {
     "landmark_idx": "landmark_index",
     "landmarkId": "landmark_index",
@@ -148,8 +172,14 @@ COLUMN_ALIASES = {
     "Frame": "frame",
 }
 
+# 数値として扱う座標・信頼度の列。
 NUMERIC_COLUMNS = ["x", "y", "z", "visibility"]
 
+# 校正用の参照動画における「右足あげ1回目/左足あげ1回目/右足あげ2回目/左足あげ2回目」の
+# フレーム番号区間（start, end, ラベル）。classify_action() が参照する。
+# ライブ計測のフレーム番号はこの参照動画のタイミングとは無関係のため、
+# ライブ計測では action_override（calculate_metrics_by_frame 参照）で
+# この区間判定を明示的にバイパスすることが多い。
 REFERENCE_ACTION_PHASES = [
     (15, 29, "right_leg_1"),
     (51, 65, "left_leg_1"),
@@ -159,21 +189,30 @@ REFERENCE_ACTION_PHASES = [
 
 RIGHT_LEG_PHASES = {"right_leg_1", "right_leg_2"}
 LEFT_LEG_PHASES = {"left_leg_1", "left_leg_2"}
+# 参照動画のフェーズ区間の最大フレーム番号。これを超えると "unknown" 扱いになる。
 REFERENCE_MAX_FRAME = max(end for _, end, _ in REFERENCE_ACTION_PHASES)
+# バンザイ判定に使うランドマーク番号（左右肩11/12, 左右手首15/16, 左右腰23/24）。
 BANZAI_REQUIRED_LANDMARKS = [11, 12, 15, 16, 23, 24]
 
 
 def _empty_metric_dict() -> Dict[str, float]:
+    """全指標を NaN で埋めた辞書を返す（読み込み失敗時のフォールバック用）。"""
     return {k: np.nan for k in SCORE_COLUMNS}
 
 
 def _source_label(source: Union[str, Path, pd.DataFrame]) -> str:
+    """ログ表示用に、入力元（ファイルパス or DataFrame）を文字列化する。"""
     if isinstance(source, (str, Path)):
         return str(source)
     return "dataframe"
 
 
 def classify_action(frame_idx: int, fps: float = 30.0) -> str:
+    """フレーム番号から参照動画上の動作フェーズ名を判定する。
+
+    REFERENCE_ACTION_PHASES のどの区間にも該当しなければ "unknown"。
+    fps 引数は現状の実装では未使用（将来の時間ベース判定用に残置）。
+    """
     if frame_idx < 0 or frame_idx > REFERENCE_MAX_FRAME:
         return "unknown"
     for start, end, label in REFERENCE_ACTION_PHASES:
@@ -189,6 +228,7 @@ def _is_left_leg_phase(action: Optional[str]) -> bool:
 
 
 def _is_right_leg_phase(action: Optional[str]) -> bool:
+    # _is_left_leg_phase と対になる右足版の判定。
     return action in RIGHT_LEG_PHASES or action == "right_leg"
 
 
@@ -207,6 +247,11 @@ def _extract_frame_indices(series: pd.Series) -> pd.Series:
 
 
 def _normalize_by_frame(df: pd.DataFrame, column: str) -> pd.Series:
+    """指定列をフレームごとに min-max 正規化（0〜1）して返す。
+
+    同一フレーム内の全ランドマークの最小値・最大値を基準にスケールするため、
+    カメラとの距離や画面内の位置に依存しにくい相対値になる。
+    """
     def _normalize(series: pd.Series) -> pd.Series:
         finite = series.replace([np.inf, -np.inf], np.nan).dropna()
         if finite.empty:
@@ -223,7 +268,15 @@ def _normalize_by_frame(df: pd.DataFrame, column: str) -> pd.Series:
 def preprocess_landmarks(raw_df: pd.DataFrame) -> pd.DataFrame:
     """
     前処理：列統一 → 正規化 → visibilityフィルタ → フレーム補間
+
+    Args:
+        raw_df: landmark_index, x, y, z（frame, visibility は任意）を
+            含む生のロング形式 DataFrame。
+
+    Returns:
+        pd.DataFrame: 全ランドマーク×全フレームの直積で欠損補間済みの DataFrame。
     """
+    # --- 列名の表記ゆれを統一 ---
     df = raw_df.copy()
     df.columns = df.columns.astype(str).str.strip()
     df = df.rename(columns={k: v for k, v in COLUMN_ALIASES.items() if k in df.columns})
@@ -241,6 +294,7 @@ def preprocess_landmarks(raw_df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # --- フレーム番号を整数化し、先頭フレームが 0 になるようシフト ---
     if "frame" in df.columns:
         frame_series = df["frame"]
     else:
@@ -261,18 +315,22 @@ def preprocess_landmarks(raw_df: pd.DataFrame) -> pd.DataFrame:
         min_frame = df["frame"].min()
         df["frame"] = df["frame"] - int(min_frame)
 
+    # --- visibility が低い（信頼できない）点は座標を NaN 化 ---
     if "visibility" in df.columns:
         low_vis_mask = df["visibility"] < 0.5
         df.loc[low_vis_mask, ["x", "y", "z"]] = np.nan
 
     df = df.sort_values(["landmark_index", "frame"]).reset_index(drop=True)
     df = df.drop_duplicates(subset=["landmark_index", "frame"], keep="last").reset_index(drop=True)
+    # MediaPipe Pose のランドマークは 0〜32 番のみ（それ以外は不正データとして除外）
     df = df[df["landmark_index"].between(0, 32)]
 
+    # --- フレームごとに座標を 0〜1 に正規化 ---
     for col in ["x", "y", "z"]:
         if col in df.columns:
             df[col] = _normalize_by_frame(df, col)
 
+    # y軸の向き（上が0か下が0か）を自動判定し、必要なら反転して統一する
     if "y" in df.columns:
         direction = _determine_vertical_direction(df)
         if direction == "bottom_up":
@@ -281,6 +339,8 @@ def preprocess_landmarks(raw_df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
+    # --- 全ランドマーク×全フレームの直積で reindex し、欠けているフレームの
+    #     行を明示的な NaN として作り出す（この後の補間対象にするため） ---
     landmarks = sorted(df["landmark_index"].unique())
     max_frame = int(df["frame"].max())
 
@@ -292,6 +352,7 @@ def preprocess_landmarks(raw_df: pd.DataFrame) -> pd.DataFrame:
     df = df.set_index(["landmark_index", "frame"]).sort_index()
     df = df.reindex(multi_index)
 
+    # --- ランドマークごとに時系列方向へ線形補間し、両端は前後の値で埋める ---
     for col in ["x", "y", "z"]:
         if col in df.columns:
             df[col] = df.groupby(level=0)[col].transform(
@@ -310,6 +371,7 @@ def preprocess_landmarks(raw_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_pose_dataframe(source: Union[str, Path, pd.DataFrame]) -> pd.DataFrame:
+    """CSV パスまたは DataFrame からランドマークを読み込み、前処理して返す。"""
     if isinstance(source, pd.DataFrame):
         raw_df = source
     else:
@@ -373,10 +435,10 @@ def evaluate_banzai_pose_auto(df: pd.DataFrame) -> Dict[str, Any]:
     if fps <= 0:
         fps = 30
 
-    VIS_THRESH = 0.3
-    HEIGHT_THRESH = 0.08
-    VERTICAL_DEG_MAX = 55
-    MIN_WINDOW_FRAMES = max(1, int(0.18 * fps))
+    VIS_THRESH = 0.3        # この visibility 未満の肩・手首・腰は信頼できないとして除外
+    HEIGHT_THRESH = 0.08    # 肩から手首までの相対的な上がり量がこの値以上で「腕が上がっている」とみなす
+    VERTICAL_DEG_MAX = 55   # 腕の傾きが垂直から何度以内なら「上に伸びている」とみなすか
+    MIN_WINDOW_FRAMES = max(1, int(0.18 * fps))  # 0.18秒未満の短い挙上区間はノイズとして無視
 
     base_result: Dict[str, Any] = {
         "file": str(df.attrs.get("source", "")),
@@ -436,6 +498,7 @@ def evaluate_banzai_pose_auto(df: pd.DataFrame) -> Dict[str, Any]:
     frame_numbers = pivot.index.to_numpy(dtype=int, copy=False)
 
     def get_xy(lm: int) -> Tuple[np.ndarray, np.ndarray]:
+        """ランドマーク番号 lm の x/y 系列を pivot テーブルから取り出す。"""
         x_vals = pivot.get(("x", lm))
         y_vals = pivot.get(("y", lm))
         if x_vals is None or y_vals is None:
@@ -463,6 +526,7 @@ def evaluate_banzai_pose_auto(df: pd.DataFrame) -> Dict[str, Any]:
         right_up = (sh_y - r_wr_y) / torso_len
 
     def _arm_angle(wr_x: np.ndarray, wr_y: np.ndarray, sh_x_vals: np.ndarray, sh_y_vals: np.ndarray) -> np.ndarray:
+        """肩→手首ベクトルが垂直方向から何度傾いているかをフレームごとに計算する。"""
         angles = np.full(len(wr_x), np.nan)
         finite_mask = np.isfinite(wr_x) & np.isfinite(wr_y) & np.isfinite(sh_x_vals) & np.isfinite(sh_y_vals)
         idx = np.where(finite_mask)[0]
@@ -513,6 +577,7 @@ def evaluate_banzai_pose_auto(df: pd.DataFrame) -> Dict[str, Any]:
         length_sec = length_frames / fps if fps > 0 else np.nan
         final_raw = np.nan
         if np.isfinite(p90) and np.isfinite(mean):
+            # ピーク(p90)を重視しつつ安定性(mean)も加味した加重平均
             final_raw = 0.6 * p90 + 0.4 * mean
         elif np.isfinite(p90):
             final_raw = float(p90)
@@ -541,6 +606,8 @@ def evaluate_banzai_pose_auto(df: pd.DataFrame) -> Dict[str, Any]:
     base_result["windows"] = window_summaries
 
     def _sort_key(item: Dict[str, Any]) -> Tuple[float, float, int]:
+        """複数の挙上区間から最良のものを選ぶための比較キー
+        （final_score → p90 → mean → 区間の長さ の優先順）。"""
         final_val_raw = item.get("final_score")
         final_val = float(final_val_raw) if final_val_raw is not None else float("-inf")
         if not np.isfinite(final_val):
@@ -581,6 +648,7 @@ def _get_landmark_series(
     landmark_index: int,
     columns: Optional[Iterable[str]] = None,
 ) -> pd.DataFrame:
+    """指定ランドマークだけを抜き出し、frame をインデックスにした DataFrame を返す。"""
     subset = df[df["landmark_index"] == landmark_index].copy()
     subset = subset.set_index("frame").sort_index()
     if columns:
@@ -592,10 +660,18 @@ def _get_landmark_series(
 
 
 def _compute_metrics(df: pd.DataFrame, source_label: str = "dataframe") -> Dict[str, float]:
+    """前処理済み DataFrame（全フレーム分）から、クリップ全体を1本の値に集約した指標を計算する。
+
+    calculate_metrics()/calculate_metrics_from_df() から呼ばれる、
+    フレーム単位ではなく「クリップ単位」の指標計算版。
+    指標ごとに try/except で保護し、1つの指標計算に失敗しても
+    他の指標の計算やアプリ全体を止めないようにしている。
+    """
     result: Dict[str, float] = {}
     frames = sorted(df["frame"].unique())
     action_by_frame = {frame: classify_action(frame) for frame in frames}
 
+    # --- head_movement: 頭(鼻)のフレーム間移動量のばらつき（標準偏差） ---
     try:
         head = _get_landmark_series(df, 0, ["x", "y", "z"])
         if head.empty:
@@ -607,6 +683,7 @@ def _compute_metrics(df: pd.DataFrame, source_label: str = "dataframe") -> Dict[
         print(f"⚠️ head_movement error ({source_label}): {exc}")
         result["head_movement"] = np.nan
 
+    # --- shoulder_tilt: 左右肩の高さ(y)の差の平均（肩の傾き） ---
     try:
         left_shoulder = _get_landmark_series(df, 11, ["y"])
         right_shoulder = _get_landmark_series(df, 12, ["y"])
@@ -619,6 +696,7 @@ def _compute_metrics(df: pd.DataFrame, source_label: str = "dataframe") -> Dict[
         print(f"⚠️ shoulder_tilt error ({source_label}): {exc}")
         result["shoulder_tilt"] = np.nan
 
+    # --- torso_tilt: 左右腰の高さ(y)の差の平均（体幹の傾き） ---
     try:
         left_hip = _get_landmark_series(df, 23, ["y"])
         right_hip = _get_landmark_series(df, 24, ["y"])
@@ -631,6 +709,7 @@ def _compute_metrics(df: pd.DataFrame, source_label: str = "dataframe") -> Dict[
         print(f"⚠️ torso_tilt error ({source_label}): {exc}")
         result["torso_tilt"] = np.nan
 
+    # --- leg_lift: 対象脚（action で判定）の足首がお尻よりどれだけ上がったか ---
     try:
         right_hip = _get_landmark_series(df, 24, ["y"])
         right_ankle = _get_landmark_series(df, 28, ["y"])
@@ -658,6 +737,7 @@ def _compute_metrics(df: pd.DataFrame, source_label: str = "dataframe") -> Dict[
         print(f"⚠️ leg_lift error ({source_label}): {exc}")
         result["leg_lift"] = np.nan
 
+    # --- foot_sway: 軸足（立っている足）のx座標のブレ（横方向の安定性） ---
     try:
         right_stance = _get_landmark_series(df, 27, ["x"])
         left_stance = _get_landmark_series(df, 28, ["x"])
@@ -681,6 +761,7 @@ def _compute_metrics(df: pd.DataFrame, source_label: str = "dataframe") -> Dict[
         print(f"⚠️ foot_sway error ({source_label}): {exc}")
         result["foot_sway"] = np.nan
 
+    # --- arm_sag: 肩と肘の高さ(y)の差の平均（腕の下がり具合。左右の平均） ---
     try:
         left_shoulder = _get_landmark_series(df, 11, ["y"])
         left_elbow = _get_landmark_series(df, 13, ["y"])
@@ -700,6 +781,10 @@ def _compute_metrics(df: pd.DataFrame, source_label: str = "dataframe") -> Dict[
 
 
 def calculate_metrics(data: Union[str, Path, pd.DataFrame]) -> Dict[str, float]:
+    """CSVパス/DataFrame からクリップ単位の指標を計算する（読み込み込みの入口関数）。
+
+    読み込みに失敗した場合は例外を投げず、全指標 NaN の辞書を返す。
+    """
     source = _source_label(data)
     try:
         df = load_pose_dataframe(data)
@@ -710,6 +795,7 @@ def calculate_metrics(data: Union[str, Path, pd.DataFrame]) -> Dict[str, float]:
 
 
 def calculate_metrics_from_df(dataframe: pd.DataFrame) -> Dict[str, float]:
+    """既に読み込み済みの DataFrame から前処理込みでクリップ単位の指標を計算する。"""
     processed = preprocess_landmarks(dataframe)
     return _compute_metrics(processed, "dataframe")
 
@@ -724,12 +810,14 @@ def calculate_metrics_by_frame(
     使わず、全フレームの action をその値に固定する。ライブ計測で種目が
     自明な場合（例: 右足あげ → "right_leg"）に使用する。
     """
+    # --- 前処理 + 各ランドマークの時系列を事前に取り出しておく ---
     df = load_pose_dataframe(data)
 
     frames = sorted(df["frame"].unique())
 
     head = _get_landmark_series(df, 0, ["x", "y", "z"])
     head_shift = head.shift(1)
+    # フレーム間のユークリッド距離（=瞬間の移動量）をそのままフレームごとの値として使う
     head_movement_series = (head - head_shift).pow(2).sum(axis=1).pow(0.5).fillna(0.0)
 
     left_shoulder = _get_landmark_series(df, 11, ["y"])
@@ -741,6 +829,7 @@ def calculate_metrics_by_frame(
     right_foot = _get_landmark_series(df, 27, ["x"])
     left_foot = _get_landmark_series(df, 28, ["x"])
 
+    # foot_sway の基準位置として、各足の最初に検出できたx座標を使う
     right_baseline_series = right_foot["x"].dropna()
     right_baseline = float(right_baseline_series.iloc[0]) if not right_baseline_series.empty else np.nan
     left_baseline_series = left_foot["x"].dropna()
@@ -748,6 +837,7 @@ def calculate_metrics_by_frame(
     left_elbow = _get_landmark_series(df, 13, ["y"])
     right_elbow = _get_landmark_series(df, 14, ["y"])
 
+    # --- バンザイ（両腕挙上）区間を検出し、フレームごとのスコアに割り当てる準備 ---
     banzai_eval = evaluate_banzai_pose_auto(df)
     window_score_map: Dict[int, float] = {}
     window_candidates: List[Tuple[int, int, float]] = []
@@ -771,6 +861,7 @@ def calculate_metrics_by_frame(
                 continue
             window_candidates.append((start_frame, end_frame, final_score))
 
+    # 各フレームが複数の挙上区間に含まれる場合はより高いスコアを優先する
     for frame in frames:
         score_val = np.nan
         for start_frame, end_frame, final_score in window_candidates:
@@ -779,6 +870,7 @@ def calculate_metrics_by_frame(
                     score_val = final_score
         window_score_map[frame] = score_val
 
+    # --- フレームごとに全指標をまとめてレコード化 ---
     records: List[Dict[str, float]] = []
     for frame in frames:
         # action_override があれば全フレーム同一 action に固定する
@@ -843,6 +935,7 @@ def calculate_metrics_by_frame(
 
 
 def plot_frame_metrics(df: pd.DataFrame, title: str = "Frame-wise Motion Dynamics") -> None:
+    """calculate_metrics_by_frame() の出力をフレーム軸で折れ線グラフ表示する（研究・デバッグ用）。"""
     plt.figure(figsize=(10, 5))
     for col in df.columns:
         if col in {"frame", "action"}:
@@ -859,6 +952,11 @@ def plot_frame_metrics(df: pd.DataFrame, title: str = "Frame-wise Motion Dynamic
 
 
 def resample_series(values: pd.Series, length: int = 100) -> np.ndarray:
+    """長さの異なる時系列を、欠損を無視した線形補間で固定長 `length` にリサンプルする。
+
+    フレーム数が異なるユーザー動作とお手本動作を同じ長さに揃えて比較するために使う
+    （compare_motion_profiles() から利用）。
+    """
     cleaned = values.dropna()
     if cleaned.empty or length <= 0:
         return np.array([])
@@ -880,6 +978,16 @@ def compare_motion_profiles(
     reference_metrics: pd.DataFrame,
     columns: Optional[Iterable[str]] = None,
 ) -> Dict[str, float]:
+    """ユーザーとお手本の指標時系列を指標ごとにコサイン類似度で比較する（研究用・現状未使用）。
+
+    Args:
+        user_metrics:      calculate_metrics_by_frame() 由来のユーザー側 DataFrame。
+        reference_metrics: 同形式のお手本側 DataFrame。
+        columns:           比較する指標名。省略時は SCORE_COLUMNS 全部。
+
+    Returns:
+        dict: 指標名 -> 類似度スコア（0〜100）。"overall_similarity" に全体平均も含む。
+    """
     if columns is None:
         columns = SCORE_COLUMNS
 

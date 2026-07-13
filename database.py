@@ -1,4 +1,11 @@
-"""SQLiteによるデータ保存モジュール。"""
+"""SQLiteによるデータ保存モジュール。
+
+テーブル構成:
+  sessions(id, subject_id, created_at)             … 計測セッション単位
+  results(id, session_id, exercise_key,
+          overall_score, grade, created_at)         … 種目ごとの結果
+  metric_scores(id, result_id, metric_key, value)   … 指標ごとのスコア
+"""
 
 import sqlite3
 from contextlib import contextmanager

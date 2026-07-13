@@ -3,6 +3,11 @@
 PRE_MEASURE のカウントダウン終了後、計測開始前に
 動画・カメラの上に「Start!!」の大きな文字を 2 秒間オーバーレイ表示する。
 開始時に「つぎは いっしょに やってみよう！スタート！」を読み上げる。
+
+注意: 現在の app.py の phase_controller() は PRE_MEASURE から直接
+TRANSITION/FINISHED へ遷移させるため、START_DISPLAY フェーズには
+実行時には到達しない（同等の「Start!!」演出は PRE_MEASURE 内の
+JS アニメーションに統合されている）。
 """
 
 import streamlit as st
