@@ -1,8 +1,8 @@
 """結果発表画面（FINISHED フェーズ）。
 
 3種目の計測結果（results）を受け取り、グレードバナー・種目別カード・
-アンケート・研究者向け詳細ビューを表示する。初回描画時に一度だけ DB へ
-結果を保存する（_save_results_to_db_once）。
+詳細な結果ビュー（「詳しくみる！」expander）・アンケートの順に表示する。
+初回描画時に一度だけ DB へ結果を保存する（_save_results_to_db_once）。
 
 注意: 画面上部のグレードは全種目の全指標をまとめて平均した値から算出し、
 種目カードのグレードは build_real_result() 側で種目ごとに算出した値を
@@ -70,14 +70,14 @@ def render_finished_view(*, results: list[dict], on_restart: Callable[[], None])
     # 4. 種目別グレード（3カラム）
     _render_per_exercise_cards(results=results)
 
-    # 5. アンケート（Google フォーム埋め込み）
-    _render_survey_form()
-
-    # 6. 研究者用折りたたみ（CSV採点 UI + 従来の詳細結果ビュー）
-    with st.expander("くわしい　けっか（けんきゅうしゃ　よう）"):
+    # 5. 詳細な結果の折りたたみ（CSV採点 UI + 従来の詳細結果ビュー）
+    with st.expander("詳しくみる！"):
         _render_researcher_csv_scoring()
         st.divider()
         render_legacy_result_view(results=results, on_restart=on_restart)
+
+    # 6. アンケート（Google フォーム埋め込み）
+    _render_survey_form()
 
     # 7. 「もう　いちど！」ボタン（最下部）
     st.button(

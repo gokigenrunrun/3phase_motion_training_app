@@ -54,7 +54,9 @@ def init_session_state() -> None:
         "last_index_transition": None,
         "transition_message": None,
         "results": [],
-        "debug_mode": True,
+        # デバッグサイドバーは既定で非表示。開発時は画面左上の
+        # 「デバッグ表示」チェックボックスで手動でONにできる。
+        "debug_mode": False,
     }
 
     for key, value in defaults.items():
