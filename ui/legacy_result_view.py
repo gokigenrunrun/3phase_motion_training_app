@@ -16,7 +16,7 @@ import math
 from html import escape
 from importlib import util
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -837,12 +837,85 @@ def _build_dummy_pose_csv_bytes() -> bytes:
     return pose_df.to_csv(index=False).encode("utf-8")
 
 
+def build_real_result_payload(results: Optional[list[dict]]) -> Dict[str, Any]:
+    """build_real_result() 由来の実測 results から、詳細ビュー用の payload を組み立てる。
+
+    各指標のスコアは、種目をまたいで計算できた（NaNでない）値だけを平均した
+    「セッション全体の平均スコア」として扱う（種目によって leg_lift/foot_sway
+    等が NaN になる仕様は logic/calculate_metrics.py の設計どおり）。
+
+    total_score は ui/finished_view.py の _compute_average_score() と同じ
+    「全種目・全指標の有限値をまとめて平均する」計算にそろえてある。
+    これはグレードバナーの点数とここでの総合点を一致させるための意図的な選択。
+
+    banzai_score は logic/scoring.py の score_from_frame_metrics() が採点対象
+    から明示的に除外しており、results の metrics dict にキー自体が存在しない。
+    この payload でも同じ方針を踏襲し、banzai_score のスコアは算出しない
+    （フィードバックカードは「データが不足しているため評価できません」と表示される）。
+
+    実測データが1件も無い場合（全種目で計測失敗）は build_dummy_result_payload()
+    にフォールバックする。
+    """
+    if not results:
+        return build_dummy_result_payload(results)
+
+    all_values: List[float] = [
+        float(v)
+        for result in results
+        for v in result.get("metrics", {}).values()
+        if isinstance(v, (int, float)) and np.isfinite(v)
+    ]
+    if not all_values:
+        return build_dummy_result_payload(results)
+
+    aggregated: Dict[str, float] = {}
+    for metric in SCORE_COLUMNS:
+        if metric == "banzai_score":
+            continue
+        metric_values = [
+            float(result["metrics"][metric])
+            for result in results
+            if isinstance(result.get("metrics", {}).get(metric), (int, float))
+            and np.isfinite(result["metrics"][metric])
+        ]
+        if metric_values:
+            aggregated[f"{metric}_score"] = float(np.mean(metric_values))
+
+    total_score = float(np.mean(all_values))
+    result_df = pd.DataFrame([{**aggregated, "total_score": total_score}])
+
+    # 過去セッションとの比較は subject_id 廃止により安全に特定できないため
+    # （ui/finished_view.py _build_diff_text() 参照）、架空の推移は作らず
+    # 「今回」1点のみを表示する。
+    score_history_df = pd.DataFrame(
+        [{"session": "今回", "score": total_score, "is_current": True}]
+    )
+
+    return {
+        "result_df": result_df,
+        # フレーム単位のスコア・CSVダウンロードは実測データを持たないため
+        # ダミー値を出さず未提供（None）とする。ダウンロードボタンは
+        # payload.get(...) is not None のガードにより自然に非表示になる。
+        "frame_scores_df": None,
+        "score_history_df": score_history_df,
+        "frame_scores_csv": None,
+        "pose_csv_bytes": None,
+        "violin_data": VIOLIN_DATA,
+    }
+
+
 def get_legacy_result_payload(results: Optional[list[dict]] = None) -> Dict[str, Any]:
-    """session_state に保存済みの payload があればそれを、無ければダミー payload を返す。"""
+    """session_state に保存済みの payload があればそれを返す。
+
+    無い場合（本来は ui/finished_view.py が計測完了時に
+    st.session_state["legacy_result_payload"] をセットしておく）は、
+    渡された results から build_real_result_payload() でその場で組み立てる
+    （results も無ければ内部でダミー payload にフォールバックする）。
+    """
     payload = st.session_state.get("legacy_result_payload")
     if isinstance(payload, dict) and payload.get("result_df") is not None:
         return payload
-    return build_dummy_result_payload(results)
+    return build_real_result_payload(results)
 
 
 def render_legacy_result_view(*, results: Optional[list[dict]] = None, on_restart: Callable[[], None]) -> None:

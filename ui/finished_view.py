@@ -20,7 +20,7 @@ import pandas as pd
 import streamlit as st
 
 import database
-from ui.legacy_result_view import render_legacy_result_view
+from ui.legacy_result_view import build_real_result_payload, render_legacy_result_view
 from ui.styles import (
     COLOR_BLUE_DARK,
     COLOR_BLUE_MID,
@@ -71,6 +71,9 @@ def render_finished_view(*, results: list[dict], on_restart: Callable[[], None])
     _render_per_exercise_cards(results=results)
 
     # 5. 詳細な結果の折りたたみ（CSV採点 UI + 従来の詳細結果ビュー）
+    # 詳細ビュー（レーダー/ドーナツ/指標別コメント）がダミー値にフォールバック
+    # しないよう、表示前に実測 payload を session_state にセットしておく。
+    st.session_state["legacy_result_payload"] = build_real_result_payload(results)
     with st.expander("詳しくみる！"):
         _render_researcher_csv_scoring()
         st.divider()
