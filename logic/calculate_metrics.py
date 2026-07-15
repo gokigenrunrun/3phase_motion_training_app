@@ -353,12 +353,19 @@ def preprocess_landmarks(raw_df: pd.DataFrame) -> pd.DataFrame:
     df = df.reindex(multi_index)
 
     # --- ランドマークごとに時系列方向へ線形補間し、両端は前後の値で埋める ---
+    # ffill/bfill も interpolate と同じくランドマーク単位（groupby(level=0)）で行う。
+    # グループ化しないと、あるランドマークがクリップ全体で欠損している場合に、
+    # MultiIndex 上で隣接する別ランドマークの値がそのまま埋まってしまい
+    # （＝見えていない部位が別部位の値のコピーで「完璧に安定」した値に化ける）、
+    # 本来 NaN のまま残るべきデータが誤って有効な値として採点対象になる。
     for col in ["x", "y", "z"]:
         if col in df.columns:
             df[col] = df.groupby(level=0)[col].transform(
                 lambda s: s.interpolate(limit_direction="both")
             )
-            df[col] = df[col].ffill().bfill()
+            df[col] = df.groupby(level=0)[col].transform(
+                lambda s: s.ffill().bfill()
+            )
 
     if "visibility" in df.columns:
         df["visibility"] = df.groupby(level=0)["visibility"].transform(
